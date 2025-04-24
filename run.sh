@@ -1,1 +1,1 @@
-CUDA_VISIBLE_DEVICES=2 python main.py --dataset MNIST-SVHN-FASHION --algorithm PreciseFCL --target_dir_name output --num_glob_iters 60
+  python main.py --dataset CIFAR100 --data_split_file data_split/CIFAR100_split_cn10_tn4_cet20_s2571.pkl --num_glob_iters 40 --local_epochs 400 --lr 1e-3 --flow_lr 5e-3 --k_loss_flow 0.5 --k_flow_lastflow 0.1 --flow_explore_theta 0.1 --fedprox_k 0.001

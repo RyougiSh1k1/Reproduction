@@ -73,8 +73,8 @@ def main(args):
         data_test = datasets.EMNIST(args.datadir, 'letters', download=False, train=False, target_transform=lambda x:x-1)
 
     elif args.dataset=='CIFAR100':
-        data_train = datasets.CIFAR100(args.datadir, download=False, train=True)
-        data_test = datasets.CIFAR100(args.datadir, download=False, train=False)
+        data_train = datasets.CIFAR100(args.datadir, download=True, train=True)
+        data_test = datasets.CIFAR100(args.datadir, download=True, train=False)
     
     elif args.dataset=='MNIST-SVHN-FASHION':
         download = False
@@ -124,12 +124,12 @@ def main(args):
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="EMNIST-letters-shuffle")
+    parser.add_argument("--dataset", type=str, default="CIFAR100")
     parser.add_argument("--datadir", type=str, default="/home/trunk/RTrunk0/urkax/datasets/PreciseFCL/")
-    parser.add_argument("--data_split_file", type=str, default="EMNIST_letters_shuffle_split_cn8_tn6_cet2_cs2_s2571.pkl")
-    parser.add_argument("--client_num", type=int, default=8)
-    parser.add_argument("--task_num", type=int, default=6)
-    parser.add_argument("--class_each_task", type=int, default=2)
+    parser.add_argument("--data_split_file", type=str, default="CIFAR100_split_cn10_tn4_cet20_s2571.pkl")
+    parser.add_argument("--client_num", type=int, default=10)
+    parser.add_argument("--task_num", type=int, default=4)
+    parser.add_argument("--class_each_task", type=int, default=20)
     parser.add_argument("--class_split", type=int, default=2)
     parser.add_argument("--seed", type=int, default=2571)
 

@@ -72,8 +72,8 @@ def get_dataset(args, dataset_name, datadir, data_split_file):
     elif dataset_name=='CIFAR100':
         unique_labels = 100
 
-        data_train = datasets.CIFAR100(datadir, download=False, train=True)
-        data_test = datasets.CIFAR100(datadir, download=False, train=False)
+        data_train = datasets.CIFAR100(datadir, download=True, train=True)
+        data_test = datasets.CIFAR100(datadir, download=True, train=False)
 
     elif args.dataset=='MNIST-SVHN-FASHION':
         unique_labels = 20

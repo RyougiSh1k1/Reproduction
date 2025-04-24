@@ -1,0 +1,83 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+
+# C extensions
+*.pyd
+
+# Distribution / packaging
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# Pytest cache
+.pytest_cache/
+
+# VSCode settings
+.vscode/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# Pyre type checker
+.pyre/
+
+# Pylint
+.pylint.d/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Logs
+*.log
+
+# Output directories
+output_dir/
+run.log
+
+# Dataset and large files
+*.tar.gz
+*.zip
+*.h5
+*.pth
+*.pt
+cifar-100-python/
+datasets/
+
+# Shell script backups
+*.sh~
+
+# Ignore user-specific files
+args.json
+
+# Ignore compiled C/Cpp files
+*.out
+*.o
+*.exe
+
+# Ignore temporary files
+*~
+.DS_Store
+Thumbs.db

@@ -53,14 +53,16 @@ def split_client_task(dataset, y_list, client_num, task_num, class_each_task, cl
             client_t_ind = []
             for y_c_t in client_y_list[c_i2][t_i]:
                 y_ind_c_t = y_ind_dict[y_c_t]
+                print(len(y_ind_c_t))
                 random.shuffle(y_ind_c_t)
                 if dataset=='CIFAR100' or dataset=='tinyImagenet':
-                    each_client_data_num = 400
+                    each_client_data_num = 400 #100
                 else:
                     each_client_data_num = round(len(y_ind_c_t)/class_split)
                 client_t_ind += y_ind_c_t[:each_client_data_num].tolist()
             client_ind.append(client_t_ind)
             client_ind_len.append(len(client_t_ind))
+            print('client %d, task %d, data num %d'%(c_i2, t_i, len(client_t_ind)))
         client_ind_list.append(client_ind)
         client_ind_list_len.append(client_ind_len)
 
@@ -125,7 +127,7 @@ def main(args):
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="CIFAR100")
-    parser.add_argument("--datadir", type=str, default="/datasets/PreciseFCL/")
+    parser.add_argument("--datadir", type=str, default="./datasets/PreciseFCL/")
     parser.add_argument("--data_split_file", type=str, default="CIFAR100_split_cn10_tn4_cet20_s2571.pkl")
     parser.add_argument("--client_num", type=int, default=10)
     parser.add_argument("--task_num", type=int, default=4)

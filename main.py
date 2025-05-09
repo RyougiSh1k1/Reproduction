@@ -36,7 +36,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="MNIST-SVHN-FASHION", choices=['EMNIST-Letters', 'EMNIST-Letters-malicious', 
                                                                             'EMNIST-Letters-shuffle', 'CIFAR100', 'MNIST-SVHN-FASHION'])
-    parser.add_argument("--datadir", type=str, default="datasets/PreciseFCL/")
+    parser.add_argument("--datadir", type=str, default="./datasets/PreciseFCL/")
     parser.add_argument("--data_split_file", type=str, default="data_split/MNISTSVHNFASHION_split_cn10_tn6_cet3_s2571.pkl")
     parser.add_argument("--malicious_client_num", type=int, default=0)
     parser.add_argument("--algorithm", type=str, default="PreciseFCL", choices=['PreciseFCL'])

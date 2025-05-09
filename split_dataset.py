@@ -125,7 +125,7 @@ def main(args):
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="CIFAR100")
-    parser.add_argument("--datadir", type=str, default="/home/trunk/RTrunk0/urkax/datasets/PreciseFCL/")
+    parser.add_argument("--datadir", type=str, default="/datasets/PreciseFCL/")
     parser.add_argument("--data_split_file", type=str, default="CIFAR100_split_cn10_tn4_cet20_s2571.pkl")
     parser.add_argument("--client_num", type=int, default=10)
     parser.add_argument("--task_num", type=int, default=4)

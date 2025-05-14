@@ -128,12 +128,12 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="CIFAR100")
     parser.add_argument("--datadir", type=str, default="./datasets/PreciseFCL/")
-    parser.add_argument("--data_split_file", type=str, default="CIFAR100_split_cn10_tn4_cet20_s2571.pkl")
+    parser.add_argument("--data_split_file", type=str, default="CIFAR100_split_cn10_tn4_cet20_s42.pkl")
     parser.add_argument("--client_num", type=int, default=10)
     parser.add_argument("--task_num", type=int, default=4)
     parser.add_argument("--class_each_task", type=int, default=20)
     parser.add_argument("--class_split", type=int, default=2)
-    parser.add_argument("--seed", type=int, default=2571)
+    parser.add_argument("--seed", type=int, default=42)
 
     args = parser.parse_args()
 

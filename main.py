@@ -40,7 +40,7 @@ if __name__ == "__main__":
     parser.add_argument("--data_split_file", type=str, default="data_split/MNISTSVHNFASHION_split_cn10_tn6_cet3_s2571.pkl")
     parser.add_argument("--malicious_client_num", type=int, default=0)
     parser.add_argument("--algorithm", type=str, default="PreciseFCL", choices=['PreciseFCL'])
-    parser.add_argument("--seed", type=int, default=2571)
+    parser.add_argument("--seed", type=int, default=42)
 
     # PreciseFCL
     parser.add_argument("--k_loss_flow", type=float, default=0.1)

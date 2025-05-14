@@ -2,6 +2,8 @@ import glog as logger
 import torch
 import time
 import numpy as np
+import os
+from torch.utils.data import DataLoader
 
 from FLAlgorithms.users.userPreciseFCL import UserPreciseFCL
 from FLAlgorithms.servers.serverbase import Server
@@ -9,6 +11,7 @@ from FLAlgorithms.PreciseFCLNet.model import PreciseModel
 from utils.dataset import get_dataset
 from utils.model_utils import read_user_data_PreciseFCL
 from utils.utils import str_in_list
+from inception_score import calculate_inception_score_for_classes
 
 class FedPrecise(Server):
     def __init__(self, args, model:PreciseModel, seed):
@@ -31,6 +34,9 @@ class FedPrecise(Server):
         # server model:
         self.model.to(device)
         # self.gaussian_intiailize(self.model.classifier)
+
+        # Initialize inception score tracking
+        self.inception_scores = {}
 
     def init_users(self, data, args, model):
         self.users = []
@@ -68,9 +74,54 @@ class FedPrecise(Server):
         logger.info("Data from {} users in total.".format(total_users))
         logger.info("Finished creating FedAvg server.")
     
+    def calculate_inception_scores(self, task_id, glob_iter):
+        """Calculate inception scores for the current task and round"""
+        logger.info("Calculating inception scores for task {} round {}".format(task_id, glob_iter))
+        
+        # Create a combined test dataset for all users
+        all_test_data = []
+        all_labels = set()
+        
+        for user in self.users:
+            # Get the test data for the current task
+            if task_id < len(user.test_data_so_far_loader):
+                loader = user.test_data_so_far_loader[task_id]
+                for x, y in loader:
+                    all_test_data.append((x, y))
+                    all_labels.update(y.numpy())
+        
+        if not all_test_data:
+            logger.warning("No test data available for task {}".format(task_id))
+            return None, None, None
+        
+        # Create a combined dataloader
+        combined_x = torch.cat([batch[0] for batch in all_test_data], dim=0)
+        combined_y = torch.cat([batch[1] for batch in all_test_data], dim=0)
+        
+        combined_dataloader = DataLoader(
+            [(combined_x[i], combined_y[i]) for i in range(len(combined_x))],
+            batch_size=32,
+            shuffle=False
+        )
+        
+        # Calculate inception scores
+        overall_score, overall_std, class_scores = calculate_inception_score_for_classes(
+            combined_dataloader, 
+            list(all_labels),
+            device=self.device
+        )
+        
+        logger.info(f"Task {task_id}, Round {glob_iter}: Inception Score = {overall_score:.4f} ± {overall_std:.4f}")
+        
+        return overall_score, overall_std, class_scores
+
     def train(self, args):
         
         N_TASKS = len(self.data['train_data'][self.data['client_names'][0]]['x'])
+        
+        # Initialize inception score tracking for each task
+        for task in range(N_TASKS):
+            self.inception_scores[task] = {}
         
         for task in range(N_TASKS):
             
@@ -104,7 +155,6 @@ class FedPrecise(Server):
                     id, train_data, test_data, label_info = read_user_data_PreciseFCL(i, self.data, dataset=args.dataset, count_labels=True, task = task)
 
                     # update dataset 
-#                     assert (self.users[i].id == id)
                     self.users[i].next_task(train_data, test_data, label_info)
 
                 # update labels info.
@@ -136,7 +186,7 @@ class FedPrecise(Server):
 
             epoch_per_task = int(self.num_glob_iters / N_TASKS)
 
-            for glob_iter_task in range( epoch_per_task):
+            for glob_iter_task in range(epoch_per_task):
                 
                 glob_iter = glob_iter_task + (epoch_per_task) * task
 
@@ -190,9 +240,34 @@ class FedPrecise(Server):
                 if self.algorithm != 'local':
                     self.aggregate_parameters_(class_partial=False)
                     
-                curr_timestamp=time.time()  # log  server-agg end time
+                curr_timestamp=time.time()  # log server-agg end time
                 agg_time = curr_timestamp - self.timestamp
                 self.metrics['server_agg_time'].append(agg_time)
+                
+                # Calculate and store inception scores for this round
+                overall_score, overall_std, class_scores = self.calculate_inception_scores(task, glob_iter)
+                
+                if overall_score is not None:
+                    self.inception_scores[task][glob_iter] = {
+                        'overall_score': overall_score,
+                        'overall_std': overall_std,
+                        'class_scores': class_scores
+                    }
+                    
+                    # Add inception scores to pickle record
+                    if 'inception_scores' not in self.pickle_record:
+                        self.pickle_record['inception_scores'] = {}
+                    if task not in self.pickle_record['inception_scores']:
+                        self.pickle_record['inception_scores'][task] = {}
+                    
+                    self.pickle_record['inception_scores'][task][glob_iter] = {
+                        'overall_score': float(overall_score),
+                        'overall_std': float(overall_std),
+                        'class_scores': {k: (float(v[0]), float(v[1])) for k, v in class_scores.items()}
+                    }
+                    
+                    # Save inception score visualization
+                    self.save_inception_score_visualization(task)
 
             if self.algorithm != 'local':
                 # send parameteres: server -> client
@@ -201,9 +276,70 @@ class FedPrecise(Server):
             self.evaluate_all_(glob_iter=glob_iter, matrix=True, personal=False)
 
             self.save_pickle()
+            
+            # Save final inception scores for this task
+            self.save_inception_score_visualization(task)
 
-        # self.save_results(args)
-        # self.save_model()
+    def save_inception_score_visualization(self, task):
+        """Save visualization of inception scores for a given task"""
+        import matplotlib.pyplot as plt
+        
+        if task not in self.inception_scores or not self.inception_scores[task]:
+            return
+            
+        # Create directory for visualizations
+        vis_dir = os.path.join(self.args.target_dir_name, 'visualizations')
+        os.makedirs(vis_dir, exist_ok=True)
+        
+        # Extract data
+        rounds = sorted(self.inception_scores[task].keys())
+        scores = [self.inception_scores[task][r]['overall_score'] for r in rounds]
+        stds = [self.inception_scores[task][r]['overall_std'] for r in rounds]
+        
+        # Create plot
+        plt.figure(figsize=(10, 6))
+        plt.errorbar(rounds, scores, yerr=stds, marker='o', linestyle='-')
+        plt.title(f'Inception Score Progress - Task {task}')
+        plt.xlabel('Round')
+        plt.ylabel('Inception Score')
+        plt.grid(True, linestyle='--', alpha=0.7)
+        
+        # Save plot
+        plt.tight_layout()
+        plt.savefig(os.path.join(vis_dir, f'inception_score_task_{task}.png'))
+        plt.close()
+        
+        # If we have class-specific scores, create class-specific plots
+        if len(rounds) > 0 and 'class_scores' in self.inception_scores[task][rounds[0]]:
+            # Get all classes across all rounds
+            all_classes = set()
+            for r in rounds:
+                all_classes.update(self.inception_scores[task][r]['class_scores'].keys())
+            
+            # Create plot for each class
+            for class_label in all_classes:
+                class_rounds = []
+                class_scores = []
+                class_stds = []
+                
+                for r in rounds:
+                    if class_label in self.inception_scores[task][r]['class_scores']:
+                        score, std = self.inception_scores[task][r]['class_scores'][class_label]
+                        class_rounds.append(r)
+                        class_scores.append(score)
+                        class_stds.append(std)
+                
+                if class_scores:  # Only create plot if we have data
+                    plt.figure(figsize=(10, 6))
+                    plt.errorbar(class_rounds, class_scores, yerr=class_stds, marker='o', linestyle='-')
+                    plt.title(f'Inception Score Progress - Task {task}, Class {class_label}')
+                    plt.xlabel('Round')
+                    plt.ylabel('Inception Score')
+                    plt.grid(True, linestyle='--', alpha=0.7)
+                    
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(vis_dir, f'inception_score_task_{task}_class_{class_label}.png'))
+                    plt.close()
 
     def aggregate_parameters_(self, class_partial):
         assert (self.selected_users is not None and len(self.selected_users) > 0)

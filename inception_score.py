@@ -123,17 +123,32 @@ def calculate_inception_score_for_classes(dataloader, class_labels, device='cuda
     """Calculate inception scores for each class in the dataset"""
     calculator = InceptionScoreCalculator(dataloader, device)
     
+    # Convert class_labels to a set for faster lookups
+    class_labels_set = set(class_labels)
+    
     # Group data by class
     class_samples = {label: [] for label in class_labels}
     class_targets = {label: [] for label in class_labels}
+    
+    # Keep track of unexpected labels
+    unexpected_labels = set()
     
     with torch.no_grad():
         for x, y in dataloader:
             for i, label in enumerate(y):
                 label_item = label.item()
-                if label_item in class_labels:
+                
+                # Check if the label is in the expected class labels
+                if label_item in class_labels_set:
                     class_samples[label_item].append(x[i:i+1])
                     class_targets[label_item].append(label_item)
+                else:
+                    # Keep track of unexpected labels
+                    unexpected_labels.add(label_item)
+    
+    # Log any unexpected labels found
+    if unexpected_labels:
+        logger.warning(f"Found unexpected class labels: {unexpected_labels}. These will be ignored.")
     
     # Calculate inception score for each class
     class_scores = {}

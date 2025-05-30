@@ -56,7 +56,7 @@ def split_client_task(dataset, y_list, client_num, task_num, class_each_task, cl
                 print(len(y_ind_c_t))
                 random.shuffle(y_ind_c_t)
                 if dataset=='CIFAR100' or dataset=='tinyImagenet':
-                    each_client_data_num = 400 #100
+                    each_client_data_num = 100 #100
                 else:
                     each_client_data_num = round(len(y_ind_c_t)/class_split)
                 client_t_ind += y_ind_c_t[:each_client_data_num].tolist()
@@ -71,7 +71,7 @@ def split_client_task(dataset, y_list, client_num, task_num, class_each_task, cl
 
 def main(args):
     if args.dataset=='EMNIST-letters' or args.dataset=='EMNIST-letters-shuffle':
-        data_train = datasets.EMNIST(args.datadir, 'letters', download=False, train=True, target_transform=lambda x:x-1)
+        data_train = datasets.EMNIST(args.datadir, 'letters', download=True, train=True, target_transform=lambda x:x-1)
         data_test = datasets.EMNIST(args.datadir, 'letters', download=False, train=False, target_transform=lambda x:x-1)
 
     elif args.dataset=='CIFAR100':
@@ -126,12 +126,12 @@ def main(args):
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="CIFAR100")
+    parser.add_argument("--dataset", type=str, default="EMNIST-letters")
     parser.add_argument("--datadir", type=str, default="./datasets/PreciseFCL/")
-    parser.add_argument("--data_split_file", type=str, default="CIFAR100_split_cn10_tn4_cet20_s42.pkl")
-    parser.add_argument("--client_num", type=int, default=10)
-    parser.add_argument("--task_num", type=int, default=4)
-    parser.add_argument("--class_each_task", type=int, default=20)
+    parser.add_argument("--data_split_file", type=str, default="EMNIST_letters_split_cn8_tn6_cet2_s42.pkl")
+    parser.add_argument("--client_num", type=int, default=8)
+    parser.add_argument("--task_num", type=int, default=6)
+    parser.add_argument("--class_each_task", type=int, default=2)
     parser.add_argument("--class_split", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
 

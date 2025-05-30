@@ -27,7 +27,8 @@ class FedPrecise(Server):
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         logger.info('Using device: ' + str(device))
         self.device = device
-
+        
+        
         for u in self.users:
             u.model = u.model.to(device)
 
@@ -37,6 +38,8 @@ class FedPrecise(Server):
 
         # Initialize inception score tracking
         self.inception_scores = {}
+        self.client_inception_scores = {}  # New: For client-specific scores
+        self.avg_inception_scores = {}     # New: For average scores across clients
 
     def init_users(self, data, args, model):
         self.users = []
@@ -73,55 +76,128 @@ class FedPrecise(Server):
         logger.info("Number of Train/Test samples: %d/%d"%(self.total_train_samples, self.total_test_samples))
         logger.info("Data from {} users in total.".format(total_users))
         logger.info("Finished creating FedAvg server.")
-    
+
+    def calculate_client_inception_scores(self, task_id, glob_iter):
+        """Calculate inception scores for each client for the current task and round"""
+        logger.info("Calculating client-specific inception scores for task {} round {}".format(task_id, glob_iter))
+        
+        client_scores = {}
+        client_stds = {}
+        client_class_scores = {}
+        
+        for user_id, user in enumerate(self.users):
+            try:
+                # Get the test data for the current task
+                if task_id < len(user.test_data_so_far_loader):
+                    loader = user.test_data_so_far_loader[task_id]
+                    
+                    # Skip if no test data available
+                    if len(loader.dataset) < 10:  # Minimum samples needed
+                        logger.warning(f"Insufficient test data for client {user_id} on task {task_id}")
+                        continue
+                    
+                    # Get all unique labels in this client's dataset
+                    all_labels = set()
+                    for _, y in loader:
+                        all_labels.update(y.numpy())
+                    
+                    # Calculate inception scores for this client
+                    try:
+                        overall_score, overall_std, class_scores = calculate_inception_score_for_classes(
+                            loader, 
+                            list(all_labels),  # Use the actual labels present in the dataset
+                            device=self.device
+                        )
+                        
+                        client_scores[user_id] = overall_score
+                        client_stds[user_id] = overall_std
+                        client_class_scores[user_id] = class_scores
+                        
+                        logger.info(f"Client {user_id}, Task {task_id}, Round {glob_iter}: " 
+                                    f"Inception Score = {overall_score:.4f} ± {overall_std:.4f}")
+                    except Exception as e:
+                        logger.error(f"Error calculating inception score for client {user_id}: {str(e)}")
+            except Exception as e:
+                logger.error(f"Error processing client {user_id}: {str(e)}")
+        
+        # Calculate average inception score across all clients
+        if client_scores:
+            avg_score = sum(client_scores.values()) / len(client_scores)
+            avg_std = sum(client_stds.values()) / len(client_stds)
+            logger.info(f"Average across all clients for Task {task_id}, Round {glob_iter}: "
+                        f"Inception Score = {avg_score:.4f} ± {avg_std:.4f}")
+        else:
+            avg_score = None
+            avg_std = None
+            logger.warning(f"No valid client scores available for task {task_id}, round {glob_iter}")
+        
+        return client_scores, client_stds, client_class_scores, avg_score, avg_std
+
     def calculate_inception_scores(self, task_id, glob_iter):
-        """Calculate inception scores for the current task and round"""
+        """
+        Calculate combined inception scores for the current task and round
+        and also client-specific scores with their average
+        """
         logger.info("Calculating inception scores for task {} round {}".format(task_id, glob_iter))
         
-        # Create a combined test dataset for all users
-        all_test_data = []
-        all_labels = set()
+        try:
+            # Get client-specific scores and average
+            client_scores, client_stds, client_class_scores, avg_score, avg_std = self.calculate_client_inception_scores(task_id, glob_iter)
+            
+            # Create a combined test dataset as in the original method
+            all_test_data = []
+            all_labels = set()
+            
+            for user in self.users:
+                if task_id < len(user.test_data_so_far_loader):
+                    loader = user.test_data_so_far_loader[task_id]
+                    for x, y in loader:
+                        all_test_data.append((x, y))
+                        all_labels.update(y.numpy())
+            
+            if not all_test_data:
+                logger.warning("No test data available for task {}".format(task_id))
+                return None, None, None, client_scores, client_stds, avg_score, avg_std
+            
+            # Create a combined dataloader
+            combined_x = torch.cat([batch[0] for batch in all_test_data], dim=0)
+            combined_y = torch.cat([batch[1] for batch in all_test_data], dim=0)
+            
+            combined_dataloader = DataLoader(
+                [(combined_x[i], combined_y[i]) for i in range(len(combined_x))],
+                batch_size=32,
+                shuffle=False
+            )
+            
+            # Calculate inception scores on combined data
+            try:
+                overall_score, overall_std, class_scores = calculate_inception_score_for_classes(
+                    combined_dataloader, 
+                    list(all_labels),  # Use the actual labels present in the dataset
+                    device=self.device
+                )
+                
+                logger.info(f"Combined data for Task {task_id}, Round {glob_iter}: "
+                            f"Inception Score = {overall_score:.4f} ± {overall_std:.4f}")
+            except Exception as e:
+                logger.error(f"Error calculating combined inception score: {str(e)}")
+                overall_score, overall_std, class_scores = None, None, None
+            
+            return overall_score, overall_std, class_scores, client_scores, client_stds, avg_score, avg_std
         
-        for user in self.users:
-            # Get the test data for the current task
-            if task_id < len(user.test_data_so_far_loader):
-                loader = user.test_data_so_far_loader[task_id]
-                for x, y in loader:
-                    all_test_data.append((x, y))
-                    all_labels.update(y.numpy())
-        
-        if not all_test_data:
-            logger.warning("No test data available for task {}".format(task_id))
-            return None, None, None
-        
-        # Create a combined dataloader
-        combined_x = torch.cat([batch[0] for batch in all_test_data], dim=0)
-        combined_y = torch.cat([batch[1] for batch in all_test_data], dim=0)
-        
-        combined_dataloader = DataLoader(
-            [(combined_x[i], combined_y[i]) for i in range(len(combined_x))],
-            batch_size=32,
-            shuffle=False
-        )
-        
-        # Calculate inception scores
-        overall_score, overall_std, class_scores = calculate_inception_score_for_classes(
-            combined_dataloader, 
-            list(all_labels),
-            device=self.device
-        )
-        
-        logger.info(f"Task {task_id}, Round {glob_iter}: Inception Score = {overall_score:.4f} ± {overall_std:.4f}")
-        
-        return overall_score, overall_std, class_scores
+        except Exception as e:
+            logger.error(f"Error in calculate_inception_scores: {str(e)}")
+            # Return empty results to avoid breaking the training loop
+            return None, None, None, {}, {}, None, None
 
     def train(self, args):
         
         N_TASKS = len(self.data['train_data'][self.data['client_names'][0]]['x'])
         
-        # Initialize inception score tracking for each task
         for task in range(N_TASKS):
             self.inception_scores[task] = {}
+            self.client_inception_scores[task] = {}  # New: Store client scores
+            self.avg_inception_scores[task] = {}     # New: Store average scores
         
         for task in range(N_TASKS):
             
@@ -244,8 +320,8 @@ class FedPrecise(Server):
                 agg_time = curr_timestamp - self.timestamp
                 self.metrics['server_agg_time'].append(agg_time)
                 
-                # Calculate and store inception scores for this round
-                overall_score, overall_std, class_scores = self.calculate_inception_scores(task, glob_iter)
+                # When calculating and storing inception scores in the training loop:
+                overall_score, overall_std, class_scores, client_scores, client_stds, avg_score, avg_std = self.calculate_inception_scores(task, glob_iter)
                 
                 if overall_score is not None:
                     self.inception_scores[task][glob_iter] = {
@@ -254,17 +330,33 @@ class FedPrecise(Server):
                         'class_scores': class_scores
                     }
                     
-                    # Add inception scores to pickle record
-                    if 'inception_scores' not in self.pickle_record:
-                        self.pickle_record['inception_scores'] = {}
-                    if task not in self.pickle_record['inception_scores']:
-                        self.pickle_record['inception_scores'][task] = {}
-                    
-                    self.pickle_record['inception_scores'][task][glob_iter] = {
-                        'overall_score': float(overall_score),
-                        'overall_std': float(overall_std),
-                        'class_scores': {k: (float(v[0]), float(v[1])) for k, v in class_scores.items()}
-                    }
+                    # Store client-specific scores and average
+                    if avg_score is not None:
+                        self.client_inception_scores[task][glob_iter] = {
+                            'client_scores': client_scores,
+                            'client_stds': client_stds
+                        }
+                        
+                        self.avg_inception_scores[task][glob_iter] = {
+                            'avg_score': avg_score,
+                            'avg_std': avg_std
+                        }
+                        
+                        # Add inception scores to pickle record
+                        if 'inception_scores' not in self.pickle_record:
+                            self.pickle_record['inception_scores'] = {}
+                        if task not in self.pickle_record['inception_scores']:
+                            self.pickle_record['inception_scores'][task] = {}
+                        
+                        self.pickle_record['inception_scores'][task][glob_iter] = {
+                            'overall_score': float(overall_score),
+                            'overall_std': float(overall_std),
+                            'class_scores': {k: (float(v[0]), float(v[1])) for k, v in class_scores.items()},
+                            'client_scores': {k: float(v) for k, v in client_scores.items()},
+                            'client_stds': {k: float(v) for k, v in client_stds.items()},
+                            'avg_score': float(avg_score),
+                            'avg_std': float(avg_std)
+                        }
                     
                     # Save inception score visualization
                     self.save_inception_score_visualization(task)
@@ -278,10 +370,12 @@ class FedPrecise(Server):
             self.save_pickle()
             
             # Save final inception scores for this task
-            self.save_inception_score_visualization(task)
-
+            #self.save_inception_score_visualization(task)
+            # After finishing a task, save the current inception scores to CSV
+            self.save_inception_scores_to_csv()
+    
     def save_inception_score_visualization(self, task):
-        """Save visualization of inception scores for a given task"""
+        """Save visualization of inception scores for a given task, including client averages"""
         import matplotlib.pyplot as plt
         
         if task not in self.inception_scores or not self.inception_scores[task]:
@@ -296,50 +390,172 @@ class FedPrecise(Server):
         scores = [self.inception_scores[task][r]['overall_score'] for r in rounds]
         stds = [self.inception_scores[task][r]['overall_std'] for r in rounds]
         
+        # Extract average scores
+        avg_scores = [self.avg_inception_scores[task][r]['avg_score'] for r in rounds]
+        avg_stds = [self.avg_inception_scores[task][r]['avg_std'] for r in rounds]
+        
         # Create plot
         plt.figure(figsize=(10, 6))
-        plt.errorbar(rounds, scores, yerr=stds, marker='o', linestyle='-')
+        plt.errorbar(rounds, scores, yerr=stds, marker='o', linestyle='-', label='Combined Data')
+        plt.errorbar(rounds, avg_scores, yerr=avg_stds, marker='s', linestyle='--', 
+                    label='Avg Across Clients', color='red')
         plt.title(f'Inception Score Progress - Task {task}')
         plt.xlabel('Round')
         plt.ylabel('Inception Score')
         plt.grid(True, linestyle='--', alpha=0.7)
+        plt.legend()
         
         # Save plot
         plt.tight_layout()
         plt.savefig(os.path.join(vis_dir, f'inception_score_task_{task}.png'))
         plt.close()
         
-        # If we have class-specific scores, create class-specific plots
-        if len(rounds) > 0 and 'class_scores' in self.inception_scores[task][rounds[0]]:
-            # Get all classes across all rounds
-            all_classes = set()
-            for r in rounds:
-                all_classes.update(self.inception_scores[task][r]['class_scores'].keys())
+        # Create client comparison plot
+        if task in self.client_inception_scores and self.client_inception_scores[task]:
+            plt.figure(figsize=(12, 8))
             
-            # Create plot for each class
-            for class_label in all_classes:
-                class_rounds = []
-                class_scores = []
-                class_stds = []
+            # Get all clients that have data in any round
+            all_clients = set()
+            for r in rounds:
+                if r in self.client_inception_scores[task]:
+                    all_clients.update(self.client_inception_scores[task][r]['client_scores'].keys())
+            all_clients = sorted(list(all_clients))
+            
+            # Plot each client's scores
+            for client_id in all_clients:
+                client_rounds = []
+                client_scores = []
                 
                 for r in rounds:
-                    if class_label in self.inception_scores[task][r]['class_scores']:
-                        score, std = self.inception_scores[task][r]['class_scores'][class_label]
-                        class_rounds.append(r)
-                        class_scores.append(score)
-                        class_stds.append(std)
+                    if r in self.client_inception_scores[task] and client_id in self.client_inception_scores[task][r]['client_scores']:
+                        client_rounds.append(r)
+                        client_scores.append(self.client_inception_scores[task][r]['client_scores'][client_id])
                 
-                if class_scores:  # Only create plot if we have data
-                    plt.figure(figsize=(10, 6))
-                    plt.errorbar(class_rounds, class_scores, yerr=class_stds, marker='o', linestyle='-')
-                    plt.title(f'Inception Score Progress - Task {task}, Class {class_label}')
-                    plt.xlabel('Round')
-                    plt.ylabel('Inception Score')
-                    plt.grid(True, linestyle='--', alpha=0.7)
+                if client_scores:
+                    plt.plot(client_rounds, client_scores, marker='.', linestyle='-', alpha=0.5, 
+                            label=f'Client {client_id}')
+            
+            # Plot the average for comparison
+            plt.plot(rounds, avg_scores, marker='s', linestyle='-', linewidth=2, 
+                    label='Avg Across Clients', color='red')
+            
+            plt.title(f'Client-Specific Inception Scores - Task {task}')
+            plt.xlabel('Round')
+            plt.ylabel('Inception Score')
+            plt.grid(True, linestyle='--', alpha=0.7)
+            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+            
+            # Save plot
+            plt.tight_layout()
+            plt.savefig(os.path.join(vis_dir, f'client_inception_scores_task_{task}.png'))
+            plt.close()
+
+        """
+    Function to save inception scores to CSV files.
+    This can be added to the FedPrecise class in serverPreciseFCL.py
+    """
+
+    def save_inception_scores_to_csv(self):
+        """
+        Save inception scores to CSV files for easier analysis.
+        Creates separate CSV files for:
+        1. Overall inception scores (combined data)
+        2. Average inception scores across clients
+        3. Client-specific inception scores
+        """
+        import csv
+        import os
+        
+        # Create directory for CSV files
+        csv_dir = os.path.join(self.args.target_dir_name, 'csv_results')
+        os.makedirs(csv_dir, exist_ok=True)
+        
+        # Get all tasks
+        tasks = sorted(self.inception_scores.keys())
+        
+        # 1. Save overall inception scores (combined data)
+        with open(os.path.join(csv_dir, 'overall_inception_scores.csv'), 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            # Write header
+            writer.writerow(['Task', 'Round', 'Overall_Score', 'Std_Dev'])
+            
+            # Write data
+            for task in tasks:
+                rounds = sorted(self.inception_scores[task].keys())
+                for r in rounds:
+                    writer.writerow([
+                        task, 
+                        r, 
+                        self.inception_scores[task][r]['overall_score'],
+                        self.inception_scores[task][r]['overall_std']
+                    ])
+        
+        # 2. Save average inception scores across clients
+        with open(os.path.join(csv_dir, 'avg_inception_scores.csv'), 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            # Write header
+            writer.writerow(['Task', 'Round', 'Avg_Score', 'Avg_Std_Dev'])
+            
+            # Write data
+            for task in tasks:
+                if task not in self.avg_inception_scores:
+                    continue
                     
-                    plt.tight_layout()
-                    plt.savefig(os.path.join(vis_dir, f'inception_score_task_{task}_class_{class_label}.png'))
-                    plt.close()
+                rounds = sorted(self.avg_inception_scores[task].keys())
+                for r in rounds:
+                    writer.writerow([
+                        task, 
+                        r, 
+                        self.avg_inception_scores[task][r]['avg_score'],
+                        self.avg_inception_scores[task][r]['avg_std']
+                    ])
+        
+        # 3. Save client-specific inception scores
+        with open(os.path.join(csv_dir, 'client_inception_scores.csv'), 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            # Write header
+            writer.writerow(['Task', 'Round', 'Client_ID', 'Score', 'Std_Dev'])
+            
+            # Write data
+            for task in tasks:
+                if task not in self.client_inception_scores:
+                    continue
+                    
+                rounds = sorted(self.client_inception_scores[task].keys())
+                for r in rounds:
+                    client_scores = self.client_inception_scores[task][r]['client_scores']
+                    client_stds = self.client_inception_scores[task][r]['client_stds']
+                    
+                    for client_id, score in client_scores.items():
+                        std = client_stds.get(client_id, 0)
+                        writer.writerow([task, r, client_id, score, std])
+        
+        # 4. Create a summary CSV with overall and average scores side by side for easy comparison
+        with open(os.path.join(csv_dir, 'inception_score_summary.csv'), 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            # Write header
+            writer.writerow(['Task', 'Round', 'Overall_Score', 'Overall_Std', 'Avg_Client_Score', 'Avg_Client_Std', 'Score_Difference'])
+            
+            # Write data
+            for task in tasks:
+                if task not in self.avg_inception_scores:
+                    continue
+                    
+                rounds = sorted(set(self.inception_scores[task].keys()) & set(self.avg_inception_scores[task].keys()))
+                for r in rounds:
+                    overall_score = self.inception_scores[task][r]['overall_score']
+                    overall_std = self.inception_scores[task][r]['overall_std']
+                    avg_score = self.avg_inception_scores[task][r]['avg_score']
+                    avg_std = self.avg_inception_scores[task][r]['avg_std']
+                    
+                    # Calculate difference between overall and average scores
+                    score_diff = overall_score - avg_score
+                    
+                    writer.writerow([
+                        task, r, overall_score, overall_std, avg_score, avg_std, score_diff
+                    ])
+        
+        logger.info(f"Inception scores saved to CSV files in {csv_dir}")
 
     def aggregate_parameters_(self, class_partial):
         assert (self.selected_users is not None and len(self.selected_users) > 0)

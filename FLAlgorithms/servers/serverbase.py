@@ -98,13 +98,27 @@ class Server:
             nn.init.constant_(m.weight, 1)
             nn.init.constant_(m.bias, 0)
 
-    def send_parameters(self, mode='all', beta=1, selected=False):
+    def send_parameters(self, mode='all', beta=1, selected=False, track_round=None):
         users = self.users
         if selected:
             assert (self.selected_users is not None and len(self.selected_users) > 0)
             users = self.selected_users
         
         for user in users:
+            # Track communication volume if round number is provided
+            if track_round is not None and hasattr(self, 'comm_tracker'):
+                if mode == 'all':
+                    # Track full model download
+                    self.comm_tracker.track_server_download(
+                        user.id, track_round, self.model
+                    )
+                else:
+                    # Track partial model download based on mode
+                    param_names = self.get_param_names_by_mode(mode)
+                    self.comm_tracker.track_server_download(
+                        user.id, track_round, self.model, param_names
+                    )
+            
             if mode == 'all': # share all parameters
                 user.set_parameters(self.model, beta=beta)
             else: # share a part parameters
@@ -120,19 +134,34 @@ class Server:
             for server_param, user_param in zip(self.model.parameters(), user.model.parameters()):
                 server_param.data = server_param.data + user_param.data.clone() * ratio
         
-    def aggregate_parameters(self, partial=False):
+    def aggregate_parameters(self, partial=False, track_round=None):
         assert (self.selected_users is not None and len(self.selected_users) > 0)
         
-        if partial:
-            for param in self.model.get_shared_parameters():
-                param.data = torch.zeros_like(param.data)
-        else:
-            for param in self.model.parameters():
-                param.data = torch.zeros_like(param.data) # initilize w with zeros
+        param_dict = {}
+        for name, param in self.model.named_parameters():
+            param_dict[name] = torch.zeros_like(param.data)
         
         total_train = 0
         for user in self.selected_users:
-            total_train += user.train_samples # length of the train data for weighted importance
+            total_train += user.train_samples
+            
+            # Track upload communication
+            if track_round is not None and hasattr(self, 'comm_tracker'):
+                # Track classifier upload
+                self.comm_tracker.track_classifier_upload(
+                    user.id, track_round, user.model.classifier
+                )
+                
+                # Track flow model upload if exists
+                if self.algorithm == 'PreciseFCL' and hasattr(user.model, 'flow') and user.model.flow is not None:
+                    self.comm_tracker.track_flow_upload(
+                        user.id, track_round, user.model.flow
+                    )
+                
+                # Track total model upload
+                self.comm_tracker.track_client_upload(
+                    user.id, track_round, user.model
+                )
         
         for user in self.selected_users:
             self.add_parameters(user, user.train_samples / total_train, partial=partial) 

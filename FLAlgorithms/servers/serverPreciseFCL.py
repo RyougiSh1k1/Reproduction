@@ -12,6 +12,7 @@ from utils.dataset import get_dataset
 from utils.model_utils import read_user_data_PreciseFCL
 from utils.utils import str_in_list
 from inception_score import calculate_inception_score_for_classes
+from utils.communication_tracker import PreciseFCLDetailedTracker
 
 class FedPrecise(Server):
     def __init__(self, args, model:PreciseModel, seed):
@@ -40,6 +41,13 @@ class FedPrecise(Server):
         self.inception_scores = {}
         self.client_inception_scores = {}  # New: For client-specific scores
         self.avg_inception_scores = {}     # New: For average scores across clients
+
+        # Initialize detailed communication tracker
+        self.comm_tracker = PreciseFCLDetailedTracker()
+        
+        # Add communication tracking to pickle record
+        self.pickle_record['communication'] = {}
+        self.pickle_record['communication_detailed'] = {}
 
     def init_users(self, data, args, model):
         self.users = []
@@ -196,8 +204,8 @@ class FedPrecise(Server):
         
         for task in range(N_TASKS):
             self.inception_scores[task] = {}
-            self.client_inception_scores[task] = {}  # New: Store client scores
-            self.avg_inception_scores[task] = {}     # New: Store average scores
+            self.client_inception_scores[task] = {}
+            self.avg_inception_scores[task] = {}
         
         for task in range(N_TASKS):
             
@@ -272,13 +280,33 @@ class FedPrecise(Server):
                 # self.selected_users, self.user_idxs=self.select_users(glob_iter, self.num_users, return_idx=True)
                 self.selected_users, self.user_idxs = self.select_users(glob_iter, len(self.users), return_idx=True)
 
-                # broadcast averaged prediction model to clients
-                if self.algorithm != 'local':                    
-                    # send parameteres: server -> client
-                    self.send_parameters(mode='all', beta=1)
+                if self.algorithm != 'local':
+                    for user in self.selected_users:
+                        # Track detailed component download
+                        if self.classifier_global_mode == 'all':
+                            # Download entire model
+                            total_bytes, component_sizes = self.comm_tracker.track_component_download(
+                                user.id, glob_iter, self.model
+                            )
+                        elif self.classifier_global_mode == 'head':
+                            # Download only classifier head
+                            total_bytes, component_sizes = self.comm_tracker.track_component_download(
+                                user.id, glob_iter, self.model, 
+                                component_filter=self.classifier_head_list
+                            )
+                        elif self.classifier_global_mode == 'extractor':
+                            # Download classifier extractor (not head)
+                            filter_list = [name for name, _ in self.model.named_parameters() 
+                                         if 'classifier' in name and not any(h in name for h in self.classifier_head_list)]
+                            total_bytes, component_sizes = self.comm_tracker.track_component_download(
+                                user.id, glob_iter, self.model, 
+                                component_filter=filter_list
+                            )
+                        
+                        # Send parameters to user
+                        user.set_parameters(self.model, beta=1)
 
                 chosen_verbose_user = np.random.randint(0, len(self.users))
-                self.timestamp = time.time() # log user-training start time
 
                 # ---------------
                 #   train user
@@ -302,23 +330,45 @@ class FedPrecise(Server):
                         
                     self.pickle_record['train'][glob_iter][user_id] = user_result
 
-                # log training time
-                curr_timestamp = time.time()
-                train_time = (curr_timestamp - self.timestamp) / len(self.selected_users)
-                self.metrics['user_train_time'].append(train_time)
-
-                self.timestamp = time.time() # log server-agg start time
 
                 #=================
                 # 2. Server update
                 #=================
 
                 if self.algorithm != 'local':
-                    self.aggregate_parameters_(class_partial=False)
+                    # Track uploads before aggregation
+                    for user in self.selected_users:
+                        # Track classifier upload (always uploaded)
+                        classifier_bytes, classifier_components = self.comm_tracker.track_component_upload(
+                            user.id, glob_iter, user.model.classifier
+                        )
+                        
+                        # Track flow model upload if it exists
+                        if self.algorithm == 'PreciseFCL' and hasattr(user.model, 'flow') and user.model.flow is not None:
+                            flow_bytes, flow_components = self.comm_tracker.track_component_upload(
+                                user.id, glob_iter, user.model.flow
+                            )
                     
-                curr_timestamp=time.time()  # log server-agg end time
-                agg_time = curr_timestamp - self.timestamp
-                self.metrics['server_agg_time'].append(agg_time)
+                    # Perform aggregation
+                    self.aggregate_parameters_(class_partial=False)
+                
+                # # Log communication summary for this round
+                # self.comm_tracker.log_round_summary(glob_iter)
+                
+                # # Store communication data in pickle record
+                # self.pickle_record['communication'][glob_iter] = self.comm_tracker.get_round_summary(glob_iter)
+
+                # curr_timestamp=time.time()  # log server-agg end time
+                # agg_time = curr_timestamp - self.timestamp
+                # self.metrics['server_agg_time'].append(agg_time)
+                
+                # ===============================================
+                # Log detailed communication summary
+                # ===============================================
+                self.comm_tracker.log_detailed_round_summary(glob_iter)
+                
+                # Store detailed communication data
+                self.pickle_record['communication_detailed'][glob_iter] = self.comm_tracker.get_round_component_summary(glob_iter)
                 
                 # When calculating and storing inception scores in the training loop:
                 overall_score, overall_std, class_scores, client_scores, client_stds, avg_score, avg_std = self.calculate_inception_scores(task, glob_iter)
@@ -373,6 +423,8 @@ class FedPrecise(Server):
             #self.save_inception_score_visualization(task)
             # After finishing a task, save the current inception scores to CSV
             self.save_inception_scores_to_csv()
+            #self.save_communication_summary()
+            self.save_detailed_communication_analysis()
     
     def save_inception_score_visualization(self, task):
         """Save visualization of inception scores for a given task, including client averages"""
@@ -557,16 +609,34 @@ class FedPrecise(Server):
         
         logger.info(f"Inception scores saved to CSV files in {csv_dir}")
 
-    def aggregate_parameters_(self, class_partial):
+    def aggregate_parameters_(self, class_partial, track_round=None):
         assert (self.selected_users is not None and len(self.selected_users) > 0)
-        
+    
         param_dict = {}
         for name, param in self.model.named_parameters():
             param_dict[name] = torch.zeros_like(param.data)
         
         total_train = 0
         for user in self.selected_users:
-            total_train += user.train_samples # length of the train data for weighted importance
+            total_train += user.train_samples
+            
+            # Track upload communication
+            if track_round is not None and hasattr(self, 'comm_tracker'):
+                # Track classifier upload
+                self.comm_tracker.track_classifier_upload(
+                    user.id, track_round, user.model.classifier
+                )
+                
+                # Track flow model upload if exists
+                if self.algorithm == 'PreciseFCL' and hasattr(user.model, 'flow') and user.model.flow is not None:
+                    self.comm_tracker.track_flow_upload(
+                        user.id, track_round, user.model.flow
+                    )
+                
+                # Track total model upload
+                self.comm_tracker.track_client_upload(
+                    user.id, track_round, user.model
+                )
         
         param_weight_sum = {}
         for user in self.selected_users:
@@ -605,3 +675,143 @@ class FedPrecise(Server):
             # replace all!
             for server_param, user_param in zip(self.model.parameters(), user.model.parameters()):
                 server_param.data = server_param.data + user_param.data.clone() * ratio
+    
+    def save_detailed_communication_analysis(self):
+            """Save detailed component-wise communication analysis"""
+            import os
+            
+            # Create directory for communication logs
+            comm_dir = os.path.join(self.args.target_dir_name, 'communication_analysis')
+            os.makedirs(comm_dir, exist_ok=True)
+            
+            # Save detailed JSON log
+            self.comm_tracker.save_detailed_communication_log(
+                os.path.join(comm_dir, 'detailed_communication_log.json')
+            )
+            
+            # Generate component breakdown visualization
+            self.comm_tracker.plot_component_breakdown(
+                save_path=os.path.join(comm_dir, 'component_breakdown.png')
+            )
+            
+            # Generate detailed text report
+            self.comm_tracker.generate_component_report(
+                os.path.join(comm_dir, 'component_report.txt')
+            )
+            
+            # Log category summary
+            self.comm_tracker.log_category_summary()
+            
+            # Create a summary CSV for easy analysis
+            self.save_component_csv_summary(comm_dir)
+            
+            # Log final summary
+            total_summary = self.comm_tracker.get_component_summary_across_rounds()
+            logger.info("\n" + "="*80)
+            logger.info("FINAL COMMUNICATION SUMMARY BY COMPONENT")
+            logger.info("="*80)
+            
+            sorted_components = sorted(total_summary.items(), 
+                                    key=lambda x: x[1]['upload'] + x[1]['download'], 
+                                    reverse=True)
+            
+            for component, totals in sorted_components[:10]:  # Top 10 components
+                upload_mb = totals['upload'] / (1024*1024)
+                download_mb = totals['download'] / (1024*1024)
+                total_mb = upload_mb + download_mb
+                logger.info(f"{component:<30} Upload: {upload_mb:>8.2f} MB, Download: {download_mb:>8.2f} MB, Total: {total_mb:>8.2f} MB")
+            
+            logger.info("="*80 + "\n")
+
+    def save_component_csv_summary(self, output_dir):
+        """Save component communication summary to CSV files"""
+        import csv
+        
+        # 1. Component totals CSV
+        component_totals = self.comm_tracker.get_component_summary_across_rounds()
+        with open(os.path.join(output_dir, 'component_totals.csv'), 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Component', 'Upload_MB', 'Download_MB', 'Total_MB'])
+            
+            sorted_components = sorted(component_totals.items(), 
+                                     key=lambda x: x[1]['upload'] + x[1]['download'], 
+                                     reverse=True)
+            
+            for component, totals in sorted_components:
+                upload_mb = totals['upload'] / (1024*1024)
+                download_mb = totals['download'] / (1024*1024)
+                total_mb = upload_mb + download_mb
+                writer.writerow([component, f"{upload_mb:.3f}", f"{download_mb:.3f}", f"{total_mb:.3f}"])
+        
+        # 2. Round-by-round component breakdown CSV
+        with open(os.path.join(output_dir, 'round_component_breakdown.csv'), 'w', newline='') as f:
+            writer = csv.writer(f)
+            
+            # Get all components and rounds
+            all_components = set()
+            all_rounds = set()
+            for round_num, components in self.comm_tracker.round_upload_summary.items():
+                all_rounds.add(round_num)
+                all_components.update(components.keys())
+            for round_num, components in self.comm_tracker.round_download_summary.items():
+                all_rounds.add(round_num)
+                all_components.update(components.keys())
+            
+            all_components = sorted(list(all_components))
+            all_rounds = sorted(list(all_rounds))
+            
+            # Write headers
+            header = ['Round', 'Direction'] + all_components + ['Total']
+            writer.writerow(header)
+            
+            # Write data
+            for round_num in all_rounds:
+                # Upload row
+                upload_row = [round_num, 'Upload']
+                total_upload = 0
+                for component in all_components:
+                    value = self.comm_tracker.round_upload_summary[round_num].get(component, 0) / (1024*1024)
+                    upload_row.append(f"{value:.3f}")
+                    total_upload += value
+                upload_row.append(f"{total_upload:.3f}")
+                writer.writerow(upload_row)
+                
+                # Download row
+                download_row = [round_num, 'Download']
+                total_download = 0
+                for component in all_components:
+                    value = self.comm_tracker.round_download_summary[round_num].get(component, 0) / (1024*1024)
+                    download_row.append(f"{value:.3f}")
+                    total_download += value
+                download_row.append(f"{total_download:.3f}")
+                writer.writerow(download_row)
+        
+        # 3. Category summary CSV
+        category_totals = self.comm_tracker.get_category_summary()
+        with open(os.path.join(output_dir, 'category_summary.csv'), 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Category', 'Upload_MB', 'Download_MB', 'Total_MB'])
+            
+            sorted_categories = sorted(category_totals.items(), 
+                                     key=lambda x: x[1]['upload'] + x[1]['download'], 
+                                     reverse=True)
+            
+            for category, totals in sorted_categories:
+                upload_mb = totals['upload'] / (1024*1024)
+                download_mb = totals['download'] / (1024*1024)
+                total_mb = upload_mb + download_mb
+                writer.writerow([category, f"{upload_mb:.3f}", f"{download_mb:.3f}", f"{total_mb:.3f}"])
+        
+        logger.info(f"Component communication summaries saved to CSV files in {output_dir}")
+    # Helper method to get parameter names by mode
+    def get_param_names_by_mode(self, mode):
+        """Get parameter names based on the sharing mode"""
+        if mode == 'head':
+            return self.classifier_head_list
+        elif mode == 'extractor':
+            return [name for name, _ in self.model.named_parameters() 
+                    if 'classifier' in name and not any(h in name for h in self.classifier_head_list)]
+        elif mode == 'all':
+            return None  # All parameters
+        else:
+            return []

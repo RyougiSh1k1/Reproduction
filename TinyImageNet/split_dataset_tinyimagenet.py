@@ -9,6 +9,8 @@ from utils.utils import setup_seed
 import urllib.request
 import zipfile
 import shutil
+from PIL import Image
+import torch.utils.data as data
 
 def download_tiny_imagenet(data_dir):
     """Download and extract Tiny ImageNet dataset"""
@@ -29,44 +31,88 @@ def download_tiny_imagenet(data_dir):
     else:
         print("Tiny ImageNet already exists.")
 
-class TinyImageNet(datasets.ImageFolder):
-    """Custom TinyImageNet dataset class"""
+class TinyImageNetDataset(data.Dataset):
+    """Custom TinyImageNet dataset that handles the validation set properly"""
     def __init__(self, root, train=True, transform=None, download=False):
+        self.root = root
+        self.train = train
+        self.transform = transform
+        
         if download and not os.path.exists(os.path.join(root, "tiny-imagenet-200")):
             download_tiny_imagenet(root)
-            
+        
+        self.data = []
+        self.targets = []
+        
+        # Create class to index mapping
+        self.class_to_idx = {}
+        self.classes = []
+        
         if train:
-            super().__init__(os.path.join(root, "tiny-imagenet-200", "train"), transform=transform)
+            self._load_train_data()
         else:
-            # For test set, we need to reorganize the val folder
-            val_dir = os.path.join(root, "tiny-imagenet-200", "val")
-            self._prepare_val_folder(val_dir)
-            super().__init__(val_dir, transform=transform)
+            self._load_val_data()
     
-    def _prepare_val_folder(self, val_dir):
-        """Reorganize validation folder to have class subfolders"""
-        val_annotations = os.path.join(val_dir, "val_annotations.txt")
-        if not os.path.exists(val_annotations):
-            return
+    def _load_train_data(self):
+        """Load training data"""
+        train_dir = os.path.join(self.root, "tiny-imagenet-200", "train")
+        
+        # Get all class directories
+        class_dirs = sorted([d for d in os.listdir(train_dir) 
+                           if os.path.isdir(os.path.join(train_dir, d))])
+        
+        for idx, class_name in enumerate(class_dirs):
+            self.class_to_idx[class_name] = idx
+            self.classes.append(class_name)
             
-        # Read annotations
-        val_img_dict = {}
-        with open(val_annotations, 'r') as f:
+            class_dir = os.path.join(train_dir, class_name, "images")
+            if os.path.exists(class_dir):
+                for img_name in os.listdir(class_dir):
+                    if img_name.endswith(('.JPEG', '.jpeg', '.jpg', '.png')):
+                        img_path = os.path.join(class_dir, img_name)
+                        self.data.append(img_path)
+                        self.targets.append(idx)
+    
+    def _load_val_data(self):
+        """Load validation data"""
+        val_dir = os.path.join(self.root, "tiny-imagenet-200", "val")
+        val_annotations_file = os.path.join(val_dir, "val_annotations.txt")
+        
+        # First, load class names from train directory to maintain consistency
+        train_dir = os.path.join(self.root, "tiny-imagenet-200", "train")
+        class_dirs = sorted([d for d in os.listdir(train_dir) 
+                           if os.path.isdir(os.path.join(train_dir, d))])
+        
+        for idx, class_name in enumerate(class_dirs):
+            self.class_to_idx[class_name] = idx
+            self.classes.append(class_name)
+        
+        # Load validation annotations
+        with open(val_annotations_file, 'r') as f:
             for line in f:
                 parts = line.strip().split('\t')
-                val_img_dict[parts[0]] = parts[1]
+                img_name = parts[0]
+                class_name = parts[1]
+                
+                img_path = os.path.join(val_dir, "images", img_name)
+                if os.path.exists(img_path):
+                    self.data.append(img_path)
+                    self.targets.append(self.class_to_idx[class_name])
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, index):
+        img_path = self.data[index]
+        target = self.targets[index]
         
-        # Create class folders if they don't exist
-        for img_name, class_name in val_img_dict.items():
-            class_dir = os.path.join(val_dir, class_name)
-            if not os.path.exists(class_dir):
-                os.makedirs(class_dir)
-            
-            # Move images to class folders
-            src = os.path.join(val_dir, "images", img_name)
-            dst = os.path.join(class_dir, img_name)
-            if os.path.exists(src) and not os.path.exists(dst):
-                shutil.move(src, dst)
+        # Load image
+        img = Image.open(img_path).convert('RGB')
+        
+        if self.transform is not None:
+            img = self.transform(img)
+        
+        return img, target
 
 def split_client_task_tinyimagenet(dataset, y_list, client_num, task_num, class_each_task):
     """
@@ -86,8 +132,9 @@ def split_client_task_tinyimagenet(dataset, y_list, client_num, task_num, class_
     client_y_list = []
     
     for client_i in range(client_num):
-        # Randomly shuffle all classes for this client
-        client_classes = y_set.copy()
+        # For TinyImageNet, we want the same 180 classes for all clients
+        # but in different task orders
+        client_classes = y_set[:task_num * class_each_task].copy()  # Use first 180 classes
         random.shuffle(client_classes)
         
         # Select classes for each task (no overlap within client)
@@ -124,7 +171,8 @@ def split_client_task_tinyimagenet(dataset, y_list, client_num, task_num, class_
                 y_ind_c_t_shuffled = y_ind_c_t.copy()
                 np.random.shuffle(y_ind_c_t_shuffled)
                 
-                # For TinyImageNet, use 100 samples per class per client
+                # For TinyImageNet, use 100 samples per class per client for train
+                # This gives 3000 samples per task (30 classes * 100 samples)
                 each_client_data_num = min(100, len(y_ind_c_t_shuffled))
                 client_t_ind.extend(y_ind_c_t_shuffled[:each_client_data_num].tolist())
             
@@ -152,15 +200,15 @@ def main(args):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     
-    # Load train and test datasets
-    data_train = TinyImageNet(args.datadir, train=True, transform=transform, download=True)
-    data_test = TinyImageNet(args.datadir, train=False, transform=transform, download=True)
+    # Load train and test datasets using custom dataset class
+    data_train = TinyImageNetDataset(args.datadir, train=True, transform=transform, download=True)
+    data_test = TinyImageNetDataset(args.datadir, train=False, transform=transform, download=True)
     
     print(f"Train samples: {len(data_train)}, Test samples: {len(data_test)}")
     
     # Get labels
-    train_y_list = [data_train[i][1] for i in range(len(data_train))]
-    test_y_list = [data_test[i][1] for i in range(len(data_test))]
+    train_y_list = data_train.targets
+    test_y_list = data_test.targets
     
     # Split data
     print("\nSplitting data for federated continual learning...")
@@ -168,6 +216,7 @@ def main(args):
         args.dataset, train_y_list, args.client_num, args.task_num, args.class_each_task
     )
     
+    # For test data, use a smaller number of samples per class
     test_inds, _ = split_client_task_tinyimagenet(
         args.dataset, test_y_list, args.client_num, args.task_num, args.class_each_task
     )
@@ -176,7 +225,7 @@ def main(args):
     pickle_dict = {
         'train_inds': train_inds, 
         'test_inds': test_inds, 
-        'client_y_list': client_y_list.tolist()
+        'client_y_list': client_y_list
     }
     
     # Create data_split directory if it doesn't exist
@@ -193,6 +242,14 @@ def main(args):
     print(f"- Tasks per client: {args.task_num}")
     print(f"- Classes per task: {args.class_each_task}")
     print(f"- Total classes used: {args.task_num * args.class_each_task} out of 200")
+    
+    # Verify the split
+    print("\nVerifying data split...")
+    for c_i in range(min(3, args.client_num)):  # Check first 3 clients
+        print(f"\nClient {c_i}:")
+        for t_i in range(args.task_num):
+            classes = client_y_list[c_i][t_i]
+            print(f"  Task {t_i}: Classes {classes[:5]}... (showing first 5 of {len(classes)})")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

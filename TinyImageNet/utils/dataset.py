@@ -9,6 +9,7 @@ import torch.utils.data as data
 import urllib.request
 import zipfile
 import shutil
+from PIL import Image
 
 def download_tiny_imagenet(data_dir):
     """Download and extract Tiny ImageNet dataset"""
@@ -29,44 +30,88 @@ def download_tiny_imagenet(data_dir):
     else:
         print("Tiny ImageNet already exists.")
 
-class TinyImageNet(datasets.ImageFolder):
-    """Custom TinyImageNet dataset class"""
+class TinyImageNetDataset(data.Dataset):
+    """Custom TinyImageNet dataset that handles the validation set properly"""
     def __init__(self, root, train=True, transform=None, download=False):
+        self.root = root
+        self.train = train
+        self.transform = transform
+        
         if download and not os.path.exists(os.path.join(root, "tiny-imagenet-200")):
             download_tiny_imagenet(root)
-            
+        
+        self.data = []
+        self.targets = []
+        
+        # Create class to index mapping
+        self.class_to_idx = {}
+        self.classes = []
+        
         if train:
-            super().__init__(os.path.join(root, "tiny-imagenet-200", "train"), transform=transform)
+            self._load_train_data()
         else:
-            # For test set, we need to reorganize the val folder
-            val_dir = os.path.join(root, "tiny-imagenet-200", "val")
-            self._prepare_val_folder(val_dir)
-            super().__init__(val_dir, transform=transform)
+            self._load_val_data()
     
-    def _prepare_val_folder(self, val_dir):
-        """Reorganize validation folder to have class subfolders"""
-        val_annotations = os.path.join(val_dir, "val_annotations.txt")
-        if not os.path.exists(val_annotations):
-            return
+    def _load_train_data(self):
+        """Load training data"""
+        train_dir = os.path.join(self.root, "tiny-imagenet-200", "train")
+        
+        # Get all class directories
+        class_dirs = sorted([d for d in os.listdir(train_dir) 
+                           if os.path.isdir(os.path.join(train_dir, d))])
+        
+        for idx, class_name in enumerate(class_dirs):
+            self.class_to_idx[class_name] = idx
+            self.classes.append(class_name)
             
-        # Read annotations
-        val_img_dict = {}
-        with open(val_annotations, 'r') as f:
+            class_dir = os.path.join(train_dir, class_name, "images")
+            if os.path.exists(class_dir):
+                for img_name in os.listdir(class_dir):
+                    if img_name.endswith(('.JPEG', '.jpeg', '.jpg', '.png')):
+                        img_path = os.path.join(class_dir, img_name)
+                        self.data.append(img_path)
+                        self.targets.append(idx)
+    
+    def _load_val_data(self):
+        """Load validation data"""
+        val_dir = os.path.join(self.root, "tiny-imagenet-200", "val")
+        val_annotations_file = os.path.join(val_dir, "val_annotations.txt")
+        
+        # First, load class names from train directory to maintain consistency
+        train_dir = os.path.join(self.root, "tiny-imagenet-200", "train")
+        class_dirs = sorted([d for d in os.listdir(train_dir) 
+                           if os.path.isdir(os.path.join(train_dir, d))])
+        
+        for idx, class_name in enumerate(class_dirs):
+            self.class_to_idx[class_name] = idx
+            self.classes.append(class_name)
+        
+        # Load validation annotations
+        with open(val_annotations_file, 'r') as f:
             for line in f:
                 parts = line.strip().split('\t')
-                val_img_dict[parts[0]] = parts[1]
+                img_name = parts[0]
+                class_name = parts[1]
+                
+                img_path = os.path.join(val_dir, "images", img_name)
+                if os.path.exists(img_path):
+                    self.data.append(img_path)
+                    self.targets.append(self.class_to_idx[class_name])
+    
+    def __len__(self):
+        return len(self.data)
+    
+    def __getitem__(self, index):
+        img_path = self.data[index]
+        target = self.targets[index]
         
-        # Create class folders if they don't exist
-        for img_name, class_name in val_img_dict.items():
-            class_dir = os.path.join(val_dir, class_name)
-            if not os.path.exists(class_dir):
-                os.makedirs(class_dir)
-            
-            # Move images to class folders
-            src = os.path.join(val_dir, "images", img_name)
-            dst = os.path.join(class_dir, img_name)
-            if os.path.exists(src) and not os.path.exists(dst):
-                shutil.move(src, dst)
+        # Load image
+        img = Image.open(img_path).convert('RGB')
+        
+        if self.transform is not None:
+            img = self.transform(img)
+        
+        return img, target
 
 def testify_client_y_list(y_list, inds, client_y_list):
     y_list = np.array(y_list)
@@ -146,9 +191,9 @@ def get_dataset(args, dataset_name, datadir, data_split_file):
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
         
-        # Load TinyImageNet
-        data_train = TinyImageNet(datadir, train=True, transform=transform, download=True)
-        data_test = TinyImageNet(datadir, train=False, transform=transform, download=True)
+        # Load TinyImageNet using custom dataset class
+        data_train = TinyImageNetDataset(datadir, train=True, transform=transform, download=True)
+        data_test = TinyImageNetDataset(datadir, train=False, transform=transform, download=True)
 
     elif args.dataset=='MNIST-SVHN-FASHION':
         unique_labels = 20
@@ -187,8 +232,13 @@ def get_dataset(args, dataset_name, datadir, data_split_file):
         for dataset in [mnist_data_test, svhn_data_test, fashionmnist_data_test]:
             data_test += [dataset[i] for i in range(len(dataset))]
 
-    train_y_list = [data_train[i][1] for i in range(len(data_train))]
-    test_y_list = [data_test[i][1] for i in range(len(data_test))]
+    if dataset_name == 'TinyImageNet':
+        # For TinyImageNet, we need to handle the dataset differently
+        train_y_list = data_train.targets
+        test_y_list = data_test.targets
+    else:
+        train_y_list = [data_train[i][1] for i in range(len(data_train))]
+        test_y_list = [data_test[i][1] for i in range(len(data_test))]
 
     with open(os.path.join(datadir, data_split_file), 'rb') as f:
         split_data = pickle.load(f)

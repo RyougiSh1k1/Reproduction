@@ -72,6 +72,18 @@ class PreciseModel(nn.Module):
             if self.algorithm=='PreciseFCL':
                 self.flow = self.get_1d_nflow_model(feature_dim=int(np.prod(self.xa_shape)), hidden_feature=512, context_feature=self.num_classes,
                                                 num_layers=4)
+        elif dataset=='TinyImageNet':
+            self.xa_shape=[512]
+            self.num_classes = 200  # TinyImageNet has 200 classes
+            # Use ResNet for TinyImageNet (64x64 images)
+            self.classifier = Resnet_plus(64, xa_dim=int(np.prod(self.xa_shape)), num_classes=self.num_classes)
+            if self.algorithm=='PreciseFCL':
+                self.flow = self.get_1d_nflow_model(
+                    feature_dim=int(np.prod(self.xa_shape)), 
+                    hidden_feature=512, 
+                    context_feature=self.num_classes,
+                    num_layers=4
+                )
 
         elif dataset=='MNIST-SVHN-FASHION':
             self.xa_shape=[512]

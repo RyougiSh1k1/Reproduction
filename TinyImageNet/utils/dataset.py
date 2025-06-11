@@ -6,6 +6,67 @@ import torchvision.datasets as datasets
 from torchvision import transforms
 import random
 import torch.utils.data as data
+import urllib.request
+import zipfile
+import shutil
+
+def download_tiny_imagenet(data_dir):
+    """Download and extract Tiny ImageNet dataset"""
+    url = "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
+    zip_file = os.path.join(data_dir, "tiny-imagenet-200.zip")
+    
+    if not os.path.exists(os.path.join(data_dir, "tiny-imagenet-200")):
+        print("Downloading Tiny ImageNet...")
+        urllib.request.urlretrieve(url, zip_file)
+        
+        print("Extracting Tiny ImageNet...")
+        with zipfile.ZipFile(zip_file, 'r') as zip_ref:
+            zip_ref.extractall(data_dir)
+        
+        # Clean up zip file
+        os.remove(zip_file)
+        print("Tiny ImageNet downloaded and extracted successfully!")
+    else:
+        print("Tiny ImageNet already exists.")
+
+class TinyImageNet(datasets.ImageFolder):
+    """Custom TinyImageNet dataset class"""
+    def __init__(self, root, train=True, transform=None, download=False):
+        if download and not os.path.exists(os.path.join(root, "tiny-imagenet-200")):
+            download_tiny_imagenet(root)
+            
+        if train:
+            super().__init__(os.path.join(root, "tiny-imagenet-200", "train"), transform=transform)
+        else:
+            # For test set, we need to reorganize the val folder
+            val_dir = os.path.join(root, "tiny-imagenet-200", "val")
+            self._prepare_val_folder(val_dir)
+            super().__init__(val_dir, transform=transform)
+    
+    def _prepare_val_folder(self, val_dir):
+        """Reorganize validation folder to have class subfolders"""
+        val_annotations = os.path.join(val_dir, "val_annotations.txt")
+        if not os.path.exists(val_annotations):
+            return
+            
+        # Read annotations
+        val_img_dict = {}
+        with open(val_annotations, 'r') as f:
+            for line in f:
+                parts = line.strip().split('\t')
+                val_img_dict[parts[0]] = parts[1]
+        
+        # Create class folders if they don't exist
+        for img_name, class_name in val_img_dict.items():
+            class_dir = os.path.join(val_dir, class_name)
+            if not os.path.exists(class_dir):
+                os.makedirs(class_dir)
+            
+            # Move images to class folders
+            src = os.path.join(val_dir, "images", img_name)
+            dst = os.path.join(class_dir, img_name)
+            if os.path.exists(src) and not os.path.exists(dst):
+                shutil.move(src, dst)
 
 def testify_client_y_list(y_list, inds, client_y_list):
     y_list = np.array(y_list)
@@ -74,6 +135,20 @@ def get_dataset(args, dataset_name, datadir, data_split_file):
 
         data_train = datasets.CIFAR100(datadir, download=True, train=True)
         data_test = datasets.CIFAR100(datadir, download=True, train=False)
+
+    elif dataset_name=='TinyImageNet':
+        unique_labels = 200
+        
+        # Define transforms for TinyImageNet
+        transform = transforms.Compose([
+            transforms.Resize(64),  # TinyImageNet images are 64x64
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+        # Load TinyImageNet
+        data_train = TinyImageNet(datadir, train=True, transform=transform, download=True)
+        data_test = TinyImageNet(datadir, train=False, transform=transform, download=True)
 
     elif args.dataset=='MNIST-SVHN-FASHION':
         unique_labels = 20

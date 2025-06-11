@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import argparse
 import os
 import torchvision.datasets as datasets
@@ -174,8 +175,12 @@ def split_client_task_tinyimagenet(dataset, y_list, client_num, task_num, class_
                 # For TinyImageNet, use 100 samples per class per client for train
                 # This gives 3000 samples per task (30 classes * 100 samples)
                 each_client_data_num = min(100, len(y_ind_c_t_shuffled))
-                client_t_ind.extend(y_ind_c_t_shuffled[:each_client_data_num].tolist())
+                # Convert to int to ensure integer type
+                selected_indices = y_ind_c_t_shuffled[:each_client_data_num].astype(int).tolist()
+                client_t_ind.extend(selected_indices)
             
+            # Ensure all indices are integers
+            client_t_ind = [int(idx) for idx in client_t_ind]
             client_ind.append(client_t_ind)
             client_ind_len.append(len(client_t_ind))
             print(f'Client {c_i}, Task {t_i}: {len(client_t_ind)} total samples')
@@ -221,11 +226,21 @@ def main(args):
         args.dataset, test_y_list, args.client_num, args.task_num, args.class_each_task
     )
     
+    # Convert client_y_list to proper format (list of integers)
+    client_y_list_clean = []
+    for client in client_y_list:
+        client_tasks = []
+        for task in client:
+            # Ensure all class labels are integers
+            task_classes = [int(c) for c in task]
+            client_tasks.append(task_classes)
+        client_y_list_clean.append(client_tasks)
+    
     # Save split information
     pickle_dict = {
         'train_inds': train_inds, 
         'test_inds': test_inds, 
-        'client_y_list': client_y_list
+        'client_y_list': client_y_list_clean
     }
     
     # Create data_split directory if it doesn't exist
@@ -248,7 +263,7 @@ def main(args):
     for c_i in range(min(3, args.client_num)):  # Check first 3 clients
         print(f"\nClient {c_i}:")
         for t_i in range(args.task_num):
-            classes = client_y_list[c_i][t_i]
+            classes = client_y_list_clean[c_i][t_i]
             print(f"  Task {t_i}: Classes {classes[:5]}... (showing first 5 of {len(classes)})")
 
 if __name__ == '__main__':

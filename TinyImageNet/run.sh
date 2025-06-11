@@ -17,13 +17,13 @@
 #     exit 1
 # fi
 
-# Check if the pickle file was created
-if [ ! -f "data_split/TinyImageNet_split_cn10_tn6_cet30_s42.pkl" ]; then
-    echo "Data split file not found. Exiting."
-    exit 1
-fi
+# # Check if the pickle file was created
+# if [ ! -f "data_split/TinyImageNet_split_cn10_tn6_cet30_s42.pkl" ]; then
+#     echo "Data split file not found. Exiting."
+#     exit 1
+# fi
 
-echo "Data split created successfully!"
+# echo "Data split created successfully!"
 
 # Run the main training script for TinyImageNet
 echo "Starting TinyImageNet training..."

@@ -11,6 +11,7 @@ import urllib.request
 import zipfile
 import shutil
 from PIL import Image
+import torch
 import torch.utils.data as data
 
 def download_tiny_imagenet(data_dir):
@@ -33,11 +34,12 @@ def download_tiny_imagenet(data_dir):
         print("Tiny ImageNet already exists.")
 
 class TinyImageNetDataset(data.Dataset):
-    """Custom TinyImageNet dataset that handles the validation set properly"""
-    def __init__(self, root, train=True, transform=None, download=False):
+    """Custom TinyImageNet dataset that uses train split for both train and test"""
+    def __init__(self, root, train=True, transform=None, download=False, indices=None):
         self.root = root
         self.train = train
         self.transform = transform
+        self.indices = indices
         
         if download and not os.path.exists(os.path.join(root, "tiny-imagenet-200")):
             download_tiny_imagenet(root)
@@ -49,10 +51,13 @@ class TinyImageNetDataset(data.Dataset):
         self.class_to_idx = {}
         self.classes = []
         
-        if train:
-            self._load_train_data()
-        else:
-            self._load_val_data()
+        # Always load from training data
+        self._load_train_data()
+        
+        # If indices are provided, use only those indices
+        if self.indices is not None:
+            self.data = [self.data[i] for i in self.indices]
+            self.targets = [self.targets[i] for i in self.indices]
     
     def _load_train_data(self):
         """Load training data"""
@@ -73,32 +78,6 @@ class TinyImageNetDataset(data.Dataset):
                         img_path = os.path.join(class_dir, img_name)
                         self.data.append(img_path)
                         self.targets.append(idx)
-    
-    def _load_val_data(self):
-        """Load validation data"""
-        val_dir = os.path.join(self.root, "tiny-imagenet-200", "val")
-        val_annotations_file = os.path.join(val_dir, "val_annotations.txt")
-        
-        # First, load class names from train directory to maintain consistency
-        train_dir = os.path.join(self.root, "tiny-imagenet-200", "train")
-        class_dirs = sorted([d for d in os.listdir(train_dir) 
-                           if os.path.isdir(os.path.join(train_dir, d))])
-        
-        for idx, class_name in enumerate(class_dirs):
-            self.class_to_idx[class_name] = idx
-            self.classes.append(class_name)
-        
-        # Load validation annotations
-        with open(val_annotations_file, 'r') as f:
-            for line in f:
-                parts = line.strip().split('\t')
-                img_name = parts[0]
-                class_name = parts[1]
-                
-                img_path = os.path.join(val_dir, "images", img_name)
-                if os.path.exists(img_path):
-                    self.data.append(img_path)
-                    self.targets.append(self.class_to_idx[class_name])
     
     def __len__(self):
         return len(self.data)
@@ -133,9 +112,8 @@ def split_client_task_tinyimagenet(dataset, y_list, client_num, task_num, class_
     client_y_list = []
     
     for client_i in range(client_num):
-        # For TinyImageNet, we want the same 180 classes for all clients
-        # but in different task orders
-        client_classes = y_set[:task_num * class_each_task].copy()  # Use first 180 classes
+        # Use first 180 classes for all clients but in different task orders
+        client_classes = y_set[:task_num * class_each_task].copy()
         random.shuffle(client_classes)
         
         # Select classes for each task (no overlap within client)
@@ -173,14 +151,15 @@ def split_client_task_tinyimagenet(dataset, y_list, client_num, task_num, class_
                 
                 # Different sample sizes for train and test
                 if is_test:
-                    # For test, use 20 samples per class per client
-                    each_client_data_num = min(20, len(y_ind_c_t_shuffled))
+                    # For test, use 20% of available samples (max 20 per class)
+                    start_idx = int(0.8 * len(y_ind_c_t_shuffled))
+                    each_client_data_num = min(20, len(y_ind_c_t_shuffled) - start_idx)
+                    selected_indices = [int(idx) for idx in y_ind_c_t_shuffled[start_idx:start_idx + each_client_data_num]]
                 else:
-                    # For train, use 80 samples per class per client
-                    each_client_data_num = min(80, len(y_ind_c_t_shuffled))
+                    # For train, use 80% of available samples (max 80 per class)
+                    each_client_data_num = min(80, int(0.8 * len(y_ind_c_t_shuffled)))
+                    selected_indices = [int(idx) for idx in y_ind_c_t_shuffled[:each_client_data_num]]
                 
-                # Convert to Python int to ensure JSON serializable
-                selected_indices = [int(idx) for idx in y_ind_c_t_shuffled[:each_client_data_num]]
                 client_t_ind.extend(selected_indices)
             
             client_ind.append(client_t_ind)
@@ -208,35 +187,35 @@ def main(args):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     
-    # Load train and test datasets using custom dataset class
-    data_train = TinyImageNetDataset(args.datadir, train=True, transform=transform, download=True)
-    data_test = TinyImageNetDataset(args.datadir, train=False, transform=transform, download=True)
+    # Load full training dataset
+    full_dataset = TinyImageNetDataset(args.datadir, train=True, transform=transform, download=True)
     
-    print(f"Train samples: {len(data_train)}, Test samples: {len(data_test)}")
+    print(f"Total samples: {len(full_dataset)}")
     
-    # Get labels
-    train_y_list = data_train.targets
-    test_y_list = data_test.targets
+    # Get all labels
+    all_y_list = full_dataset.targets
     
-    # Split data
-    print("\nSplitting data for federated continual learning...")
+    # Create a train/test split from the full dataset
+    # Use the same indices for both train and test splitting to ensure consistency
+    print("\nCreating train/test split from training data...")
+    
+    # Split data for training (using first 80% of data)
     train_inds, client_y_list = split_client_task_tinyimagenet(
-        args.dataset, train_y_list, args.client_num, args.task_num, args.class_each_task, is_test=False
+        args.dataset, all_y_list, args.client_num, args.task_num, args.class_each_task, is_test=False
     )
     
-    # For test data, use a smaller number of samples per class
+    # Split data for testing (using last 20% of data)
     test_inds, _ = split_client_task_tinyimagenet(
-        args.dataset, test_y_list, args.client_num, args.task_num, args.class_each_task, is_test=True
+        args.dataset, all_y_list, args.client_num, args.task_num, args.class_each_task, is_test=True
     )
     
-    # Verify all indices are integers
+    # Verify and convert indices
     def verify_and_convert_indices(indices_list):
         """Ensure all indices are Python integers"""
         converted = []
         for client_indices in indices_list:
             client_converted = []
             for task_indices in client_indices:
-                # Convert numpy integers to Python integers
                 task_converted = [int(idx) for idx in task_indices]
                 client_converted.append(task_converted)
             converted.append(client_converted)
@@ -253,20 +232,6 @@ def main(args):
             task_classes = [int(c) for c in task]
             client_tasks.append(task_classes)
         client_y_list_clean.append(client_tasks)
-    
-    # Verify the conversion
-    print("\nVerifying data types...")
-    for c_i in range(min(2, args.client_num)):
-        for t_i in range(min(2, args.task_num)):
-            # Check train indices
-            sample_idx = train_inds[c_i][t_i][0] if train_inds[c_i][t_i] else None
-            if sample_idx is not None:
-                print(f"Train index type for client {c_i}, task {t_i}: {type(sample_idx)} (value: {sample_idx})")
-            
-            # Check test indices  
-            sample_idx = test_inds[c_i][t_i][0] if test_inds[c_i][t_i] else None
-            if sample_idx is not None:
-                print(f"Test index type for client {c_i}, task {t_i}: {type(sample_idx)} (value: {sample_idx})")
     
     # Save split information
     pickle_dict = {
@@ -290,16 +255,11 @@ def main(args):
     print(f"- Classes per task: {args.class_each_task}")
     print(f"- Total classes used: {args.task_num * args.class_each_task} out of 200")
     
-    # Verify the split
-    print("\nVerifying data split...")
-    for c_i in range(min(3, args.client_num)):  # Check first 3 clients
-        print(f"\nClient {c_i}:")
-        for t_i in range(args.task_num):
-            classes = client_y_list_clean[c_i][t_i]
-            train_samples = len(train_inds[c_i][t_i])
-            test_samples = len(test_inds[c_i][t_i])
-            print(f"  Task {t_i}: Classes {classes[:5]}... (showing first 5 of {len(classes)})")
-            print(f"           Train samples: {train_samples}, Test samples: {test_samples}")
+    # Calculate total samples
+    total_train_samples = sum(len(indices) for client in train_inds for indices in client)
+    total_test_samples = sum(len(indices) for client in test_inds for indices in client)
+    print(f"- Total train samples: {total_train_samples}")
+    print(f"- Total test samples: {total_test_samples}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

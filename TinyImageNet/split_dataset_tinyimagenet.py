@@ -115,7 +115,7 @@ class TinyImageNetDataset(data.Dataset):
         
         return img, target
 
-def split_client_task_tinyimagenet(dataset, y_list, client_num, task_num, class_each_task):
+def split_client_task_tinyimagenet(dataset, y_list, client_num, task_num, class_each_task, is_test=False):
     """
     Split TinyImageNet dataset for federated continual learning
     - 10 clients
@@ -146,7 +146,7 @@ def split_client_task_tinyimagenet(dataset, y_list, client_num, task_num, class_
             task_classes = client_classes[start_idx:end_idx]
             client_i_tasks.append(task_classes)
         
-        client_y_list.append(np.array(client_i_tasks))
+        client_y_list.append(client_i_tasks)
     
     # Create index lists for train and test data
     y_ind_dict = {}
@@ -166,29 +166,32 @@ def split_client_task_tinyimagenet(dataset, y_list, client_num, task_num, class_
             
             for y_c_t in client_y_list[c_i][t_i]:
                 y_ind_c_t = y_ind_dict[y_c_t]
-                print(f"Client {c_i}, Task {t_i}, Class {y_c_t}: {len(y_ind_c_t)} samples")
                 
                 # Shuffle indices
                 y_ind_c_t_shuffled = y_ind_c_t.copy()
                 np.random.shuffle(y_ind_c_t_shuffled)
                 
-                # For TinyImageNet, use 100 samples per class per client for train
-                # This gives 3000 samples per task (30 classes * 100 samples)
-                each_client_data_num = min(100, len(y_ind_c_t_shuffled))
-                # Convert to int to ensure integer type
-                selected_indices = y_ind_c_t_shuffled[:each_client_data_num].astype(int).tolist()
+                # Different sample sizes for train and test
+                if is_test:
+                    # For test, use 20 samples per class per client
+                    each_client_data_num = min(20, len(y_ind_c_t_shuffled))
+                else:
+                    # For train, use 80 samples per class per client
+                    each_client_data_num = min(80, len(y_ind_c_t_shuffled))
+                
+                # Convert to Python int to ensure JSON serializable
+                selected_indices = [int(idx) for idx in y_ind_c_t_shuffled[:each_client_data_num]]
                 client_t_ind.extend(selected_indices)
             
-            # Ensure all indices are integers
-            client_t_ind = [int(idx) for idx in client_t_ind]
             client_ind.append(client_t_ind)
             client_ind_len.append(len(client_t_ind))
-            print(f'Client {c_i}, Task {t_i}: {len(client_t_ind)} total samples')
+            
+            if c_i == 0:  # Print info for first client only
+                print(f'Client {c_i}, Task {t_i}: {len(client_t_ind)} {"test" if is_test else "train"} samples')
         
         client_ind_list.append(client_ind)
         client_ind_list_len.append(client_ind_len)
     
-    client_ind_list_len = np.array(client_ind_list_len)
     return client_ind_list, client_y_list
 
 def main(args):
@@ -218,23 +221,52 @@ def main(args):
     # Split data
     print("\nSplitting data for federated continual learning...")
     train_inds, client_y_list = split_client_task_tinyimagenet(
-        args.dataset, train_y_list, args.client_num, args.task_num, args.class_each_task
+        args.dataset, train_y_list, args.client_num, args.task_num, args.class_each_task, is_test=False
     )
     
     # For test data, use a smaller number of samples per class
     test_inds, _ = split_client_task_tinyimagenet(
-        args.dataset, test_y_list, args.client_num, args.task_num, args.class_each_task
+        args.dataset, test_y_list, args.client_num, args.task_num, args.class_each_task, is_test=True
     )
     
-    # Convert client_y_list to proper format (list of integers)
+    # Verify all indices are integers
+    def verify_and_convert_indices(indices_list):
+        """Ensure all indices are Python integers"""
+        converted = []
+        for client_indices in indices_list:
+            client_converted = []
+            for task_indices in client_indices:
+                # Convert numpy integers to Python integers
+                task_converted = [int(idx) for idx in task_indices]
+                client_converted.append(task_converted)
+            converted.append(client_converted)
+        return converted
+    
+    train_inds = verify_and_convert_indices(train_inds)
+    test_inds = verify_and_convert_indices(test_inds)
+    
+    # Convert client_y_list to ensure all are Python integers
     client_y_list_clean = []
     for client in client_y_list:
         client_tasks = []
         for task in client:
-            # Ensure all class labels are integers
             task_classes = [int(c) for c in task]
             client_tasks.append(task_classes)
         client_y_list_clean.append(client_tasks)
+    
+    # Verify the conversion
+    print("\nVerifying data types...")
+    for c_i in range(min(2, args.client_num)):
+        for t_i in range(min(2, args.task_num)):
+            # Check train indices
+            sample_idx = train_inds[c_i][t_i][0] if train_inds[c_i][t_i] else None
+            if sample_idx is not None:
+                print(f"Train index type for client {c_i}, task {t_i}: {type(sample_idx)} (value: {sample_idx})")
+            
+            # Check test indices  
+            sample_idx = test_inds[c_i][t_i][0] if test_inds[c_i][t_i] else None
+            if sample_idx is not None:
+                print(f"Test index type for client {c_i}, task {t_i}: {type(sample_idx)} (value: {sample_idx})")
     
     # Save split information
     pickle_dict = {
@@ -264,7 +296,10 @@ def main(args):
         print(f"\nClient {c_i}:")
         for t_i in range(args.task_num):
             classes = client_y_list_clean[c_i][t_i]
+            train_samples = len(train_inds[c_i][t_i])
+            test_samples = len(test_inds[c_i][t_i])
             print(f"  Task {t_i}: Classes {classes[:5]}... (showing first 5 of {len(classes)})")
+            print(f"           Train samples: {train_samples}, Test samples: {test_samples}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()

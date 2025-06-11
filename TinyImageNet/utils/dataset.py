@@ -117,7 +117,9 @@ def testify_client_y_list(y_list, inds, client_y_list):
     y_list = np.array(y_list)
     for c_i in range(len(inds)):
         for t_i in range(len(inds[c_i])):
-            y_c_t = y_list[np.array(inds[c_i][t_i])]
+            # Ensure indices are integers
+            indices = np.array(inds[c_i][t_i], dtype=np.int64)
+            y_c_t = y_list[indices]
             y_c_t_set = set(y_c_t)
             assert y_c_t_set==set(client_y_list[c_i][t_i])
 
@@ -127,7 +129,8 @@ def split_data_from_inds(data, inds):
         x_c = []
         y_c = []
         for t_i in range(len(inds[c_i])):
-            inds_c_t = inds[c_i][t_i]
+            # Ensure indices are integers
+            inds_c_t = [int(i) for i in inds[c_i][t_i]]
             x_c_t = [data[i][0] for i in inds_c_t]
             y_c_t = [data[i][1] for i in inds_c_t]
 

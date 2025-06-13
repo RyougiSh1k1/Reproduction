@@ -41,5 +41,5 @@ python main.py \
     --flow_explore_theta 0.1 \
     --fedprox_k 0.001 \
     --batch_size 32 \
-    --c_channel_size 64 \
+    --c-channel-size 64 \
     --target_dir_name output_tinyimagenet

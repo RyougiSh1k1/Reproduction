@@ -1,8 +1,0 @@
-numpy
-scipy
-Pillow
-matplotlib
-tqdm
-h5py
-sklearn
-seaborn

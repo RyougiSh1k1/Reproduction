@@ -15,8 +15,6 @@ from utils.dataset import Transform_dataset
 METRICS = ['glob_acc', 'per_acc', 'glob_loss', 'per_loss', 'user_train_time', 'server_agg_time']
 
 
-
-
 def read_user_data_PreciseFCL(index, data, dataset='', count_labels=False, task = 0):
     '''
     INPUT:
@@ -55,6 +53,25 @@ def read_user_data_PreciseFCL(index, data, dataset='', count_labels=False, task 
 
         train_data = Transform_dataset(X_train, y_train, train_transform)
         test_data = Transform_dataset(X_test, y_test, test_transform)
+    
+    elif dataset=='TinyImageNet':
+        img_size = 64
+        # TinyImageNet specific transforms
+        train_transform = transforms.Compose([
+            transforms.RandomCrop((img_size, img_size), padding=8),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        test_transform = transforms.Compose([
+            transforms.Resize(img_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+        train_data = Transform_dataset(X_train, y_train, train_transform)
+        test_data = Transform_dataset(X_test, y_test, test_transform)
         
     if count_labels:
         label_info = {}
@@ -80,6 +97,8 @@ def get_dataset_name(dataset):
         passed_dataset='mnist'
     elif 'cifar' in dataset:
         passed_dataset='cifar'
+    elif 'tinyimagenet' in dataset:
+        passed_dataset='tinyimagenet'
     else:
         raise ValueError('Unsupported dataset {}'.format(dataset))
     return passed_dataset

@@ -6,6 +6,7 @@ import torchvision.datasets as datasets
 from torchvision import transforms
 import random
 import torch.utils.data as data
+from utils.tinyimagenet import TinyImageNetDataset
 
 def testify_client_y_list(y_list, inds, client_y_list):
     y_list = np.array(y_list)
@@ -112,6 +113,29 @@ def get_dataset(args, dataset_name, datadir, data_split_file):
         for dataset in [mnist_data_test, svhn_data_test, fashionmnist_data_test]:
             data_test += [dataset[i] for i in range(len(dataset))]
 
+    elif dataset_name=='TinyImageNet':
+        unique_labels = 200
+        
+        # Define transforms for TinyImageNet
+        train_transform = transforms.Compose([
+            transforms.RandomCrop(64, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+        test_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+        # You'll need to implement a custom TinyImageNet dataset class or use an existing one
+        # For now, assuming you have TinyImageNet downloaded and structured properly
+        data_train = TinyImageNetDataset(os.path.join(datadir, 'tiny-imagenet-200'), 
+                                        split='train', transform=train_transform)
+        data_test = TinyImageNetDataset(os.path.join(datadir, 'tiny-imagenet-200'), 
+                                    split='val', transform=test_transform)
+    
     train_y_list = [data_train[i][1] for i in range(len(data_train))]
     test_y_list = [data_test[i][1] for i in range(len(data_test))]
 

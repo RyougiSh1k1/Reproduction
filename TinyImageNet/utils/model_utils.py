@@ -55,7 +55,23 @@ def read_user_data_PreciseFCL(index, data, dataset='', count_labels=False, task 
 
         train_data = Transform_dataset(X_train, y_train, train_transform)
         test_data = Transform_dataset(X_test, y_test, test_transform)
+    elif dataset=='TinyImageNet':
+        img_size = 64
+        train_transform = transforms.Compose([
+            transforms.RandomCrop(64, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        test_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
         
+        train_data = Transform_dataset(X_train, y_train, train_transform)
+        test_data = Transform_dataset(X_test, y_test, test_transform)
+
     if count_labels:
         label_info = {}
         unique_y, counts=torch.unique(y_train, return_counts=True)

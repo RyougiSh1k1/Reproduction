@@ -68,8 +68,17 @@ class Resnet_plus(nn.Module):
         self.image_size = image_size
         self.num_classes = num_classes
         
-        # layers
-        self.features = resnet18_cbam(False)
+        # layers - adjust for different image sizes
+        if image_size == 32:
+            # Original code for CIFAR
+            self.features = resnet18_cbam(False)
+        elif image_size == 64:
+            # For TinyImageNet - modify the first conv layer
+            self.features = resnet18_cbam(False)
+            # Replace first conv to handle 64x64 images better
+            self.features.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+            self.features.maxpool = nn.Identity()  # Remove maxpool for smaller images
+        
         channel_size = 512
         self.fc1 = nn.Linear(channel_size, xa_dim)
         self.fc2 = nn.Linear(xa_dim, xa_dim)
@@ -79,21 +88,3 @@ class Resnet_plus(nn.Module):
         
         # activation functions:
         self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x):
-        xa = self.forward_to_xa(x)
-        classes_p, logits = self.forward_from_xa(xa)
-
-        return classes_p, xa, logits  
-    
-    def forward_to_xa(self, x):
-        xa = self.features(x) # [N, 512]
-        return xa
-
-    def forward_from_xa(self, xa):
-        xa = F.leaky_relu(self.fc1(xa))
-        xb = F.leaky_relu(self.fc2(xa))
-        logits = self.fc_classifier(xb)        
-        classes_p = self.softmax(logits)
-
-        return classes_p, logits

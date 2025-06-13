@@ -111,7 +111,19 @@ def main(args):
             data_train += [dataset[i] for i in range(len(dataset))]
         for dataset in [mnist_data_test, svhn_data_test, fashionmnist_data_test]:
             data_test += [dataset[i] for i in range(len(dataset))]
-
+    elif args.dataset=='TinyImageNet':
+        # Import the custom TinyImageNet dataset
+        from utils.tinyimagenet import TinyImageNetDataset
+        
+        train_transform = transforms.Compose([
+            transforms.ToTensor()
+        ])
+        
+        data_train = TinyImageNetDataset(os.path.join(args.datadir, 'tiny-imagenet-200'), 
+                                        split='train', transform=train_transform)
+        data_test = TinyImageNetDataset(os.path.join(args.datadir, 'tiny-imagenet-200'), 
+                                    split='val', transform=train_transform)
+    
     train_y_list = [data_train[i][1] for i in range(len(data_train))]
     test_y_list = [data_test[i][1] for i in range(len(data_test))]
 
@@ -126,13 +138,13 @@ def main(args):
 
 if __name__=='__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", type=str, default="EMNIST-letters")
+    parser.add_argument("--dataset", type=str, default="TinyImageNet")
     parser.add_argument("--datadir", type=str, default="./datasets/PreciseFCL/")
-    parser.add_argument("--data_split_file", type=str, default="EMNIST_letters_split_cn8_tn6_cet2_s42.pkl")
-    parser.add_argument("--client_num", type=int, default=8)
-    parser.add_argument("--task_num", type=int, default=6)
-    parser.add_argument("--class_each_task", type=int, default=2)
-    parser.add_argument("--class_split", type=int, default=2)
+    parser.add_argument("--data_split_file", type=str, default="TinyImageNet_split_cn10_tn5_cet40_s42.pkl")
+    parser.add_argument("--client_num", type=int, default=10)
+    parser.add_argument("--task_num", type=int, default=5)
+    parser.add_argument("--class_each_task", type=int, default=40)
+    parser.add_argument("--class_split", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
 
     args = parser.parse_args()

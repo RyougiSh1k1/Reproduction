@@ -31,8 +31,8 @@
 echo "Running PreciseFCL on TinyImageNet..."
 python main.py \
     --dataset TinyImageNet \
-    --data_split_file data_split/TinyImageNet_split_cn10_tn5_cet40_s42.pkl \
-    --num_glob_iters 50 \
+    --data_split_file data_split/TinyImageNet_split_cn10_tn6_cet30_s42.pkl \
+    --num_glob_iters 60 \
     --local_epochs 100 \
     --lr 1e-3 \
     --flow_lr 5e-3 \

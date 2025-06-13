@@ -140,10 +140,10 @@ if __name__=='__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=str, default="TinyImageNet")
     parser.add_argument("--datadir", type=str, default="./datasets/PreciseFCL/")
-    parser.add_argument("--data_split_file", type=str, default="TinyImageNet_split_cn10_tn5_cet40_s42.pkl")
+    parser.add_argument("--data_split_file", type=str, default="TinyImageNet_split_cn10_tn6_cet30_s42.pkl")
     parser.add_argument("--client_num", type=int, default=10)
-    parser.add_argument("--task_num", type=int, default=5)
-    parser.add_argument("--class_each_task", type=int, default=40)
+    parser.add_argument("--task_num", type=int, default=6)
+    parser.add_argument("--class_each_task", type=int, default=30)
     parser.add_argument("--class_split", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
 

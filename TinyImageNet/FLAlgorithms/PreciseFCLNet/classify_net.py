@@ -77,7 +77,11 @@ class Resnet_plus(nn.Module):
             self.features = resnet18_cbam(False)
             # Replace first conv to handle 64x64 images better
             self.features.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
-            self.features.maxpool = nn.Identity()  # Remove maxpool for smaller images
+            # Remove maxpool to keep feature map size reasonable
+            self.features.maxpool = nn.Identity()
+            # Update the final pooling layer to match TinyImageNet feature map size
+            # After conv layers with the modified first conv, we get 8x8 feature maps
+            self.features.feature = nn.AvgPool2d(8, stride=1)
         
         channel_size = 512
         self.fc1 = nn.Linear(channel_size, xa_dim)
@@ -96,8 +100,9 @@ class Resnet_plus(nn.Module):
         return classes_p, xa, logits  
     
     def forward_to_xa(self, x):
+        # The ResNet feature extractor already outputs a flattened vector
         xa = self.features(x)
-        xa = xa.view(xa.shape[0], -1)
+        # xa is already shape [batch_size, 512] from ResNet
         xa = F.leaky_relu(self.fc1(xa))
         return xa
 

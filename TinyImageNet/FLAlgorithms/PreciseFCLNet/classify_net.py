@@ -88,3 +88,22 @@ class Resnet_plus(nn.Module):
         
         # activation functions:
         self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        xa = self.forward_to_xa(x)
+        classes_p, logits = self.forward_from_xa(xa)
+
+        return classes_p, xa, logits  
+    
+    def forward_to_xa(self, x):
+        xa = self.features(x)
+        xa = xa.view(xa.shape[0], -1)
+        xa = F.leaky_relu(self.fc1(xa))
+        return xa
+
+    def forward_from_xa(self, xa):
+        xb = F.leaky_relu(self.fc2(xa))
+        logits = self.fc_classifier(xb)        
+        classes_p = self.softmax(logits)
+
+        return classes_p, logits

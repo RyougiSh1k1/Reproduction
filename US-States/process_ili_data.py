@@ -3,7 +3,6 @@ import numpy as np
 import os
 import pickle
 import torch
-from collections import defaultdict
 
 def preprocess_ili_data(input_path='data/state360.txt', output_dir='data/processed'):
     """
@@ -84,10 +83,6 @@ def preprocess_ili_data(input_path='data/state360.txt', output_dir='data/process
                 # For classification: use the state with highest value
                 dominant_state = client_states[np.argmax(row)]
                 task_y.append(dominant_state)
-                
-                # Alternative: You could also use regression targets
-                # task_y.append(row[0])  # Predict first state value
-                # task_y.append(np.mean(row))  # Predict mean value
             
             x_tasks.append(task_x)
             y_tasks.append(task_y)
@@ -130,12 +125,26 @@ def preprocess_ili_data(input_path='data/state360.txt', output_dir='data/process
         'samples_per_task': 50
     }
     
+    # Also create simple pickle format
+    ili_processed = {
+        'train_data': train_data_full,
+        'test_data': test_data_full,
+        'client_assignments': client_assignments,
+        'task_splits': {i: {'start': i*50, 'end': (i+1)*50} for i in range(6)}
+    }
+    
     # Save in pickle format
     output_path = os.path.join(output_dir, 'ili_afcl_data.pkl')
     with open(output_path, 'wb') as f:
         pickle.dump(ili_data, f)
     
+    # Save processed data too
+    processed_path = os.path.join(output_dir, 'ili_processed.pkl')
+    with open(processed_path, 'wb') as f:
+        pickle.dump(ili_processed, f)
+    
     print(f"\nProcessed data saved to {output_path}")
+    print(f"Simple processed data saved to {processed_path}")
     
     # Print summary statistics
     print("\n" + "="*50)
@@ -164,137 +173,6 @@ def preprocess_ili_data(input_path='data/state360.txt', output_dir='data/process
     return ili_data
 
 
-def create_sliding_window_data(data, window_size=5, stride=1):
-    """
-    Create sliding window samples from time series data
-    This is an alternative preprocessing approach
-    """
-    samples = []
-    labels = []
-    
-    for i in range(0, len(data) - window_size, stride):
-        # Use window_size timesteps as input
-        sample = data[i:i+window_size].flatten()
-        # Predict the next timestep (or use other labeling strategies)
-        label = data[i+window_size]
-        
-        samples.append(sample)
-        labels.append(label)
-    
-    return np.array(samples), np.array(labels)
-
-
-def preprocess_ili_data_regression(input_path='data/state360.txt', output_dir='data/processed'):
-    """
-    Alternative preprocessing for regression tasks
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Read and normalize data (same as before)
-    data = []
-    with open(input_path, 'r') as f:
-        for line in f:
-            values = [float(x) for x in line.strip().split(',')]
-            data.append(values)
-    
-    data = np.array(data, dtype=np.float32)
-    data_min = data.min()
-    data_max = data.max()
-    data_normalized = (data - data_min) / (data_max - data_min + 1e-8)
-    
-    train_data_full = data_normalized[:300]
-    test_data_full = data_normalized[300:]
-    
-    # Client assignments
-    client_assignments = {}
-    for client_id in range(7):
-        start_state = client_id * 7
-        end_state = start_state + 7
-        client_assignments[client_id] = list(range(start_state, end_state))
-    
-    # Create data with regression targets
-    train_data_dict = {}
-    test_data_dict = {}
-    
-    for client_id in range(7):
-        client_states = client_assignments[client_id]
-        client_name = f'client_{client_id}'
-        
-        client_train = train_data_full[:, client_states]
-        client_test = test_data_full[:, client_states]
-        
-        x_tasks = []
-        y_tasks = []
-        
-        for task_id in range(6):
-            start_row = task_id * 50
-            end_row = start_row + 50
-            
-            task_data = client_train[start_row:end_row]
-            
-            task_x = []
-            task_y = []
-            
-            # For regression: predict next timestep
-            for i in range(len(task_data) - 1):
-                task_x.append(task_data[i])
-                # Predict the mean of next timestep
-                task_y.append(np.mean(task_data[i+1]))
-            
-            # Add last sample predicting itself
-            task_x.append(task_data[-1])
-            task_y.append(np.mean(task_data[-1]))
-            
-            x_tasks.append(task_x)
-            y_tasks.append(task_y)
-        
-        # Test data for regression
-        test_x_all = []
-        test_y_all = []
-        
-        for i in range(len(client_test) - 1):
-            test_x_all.append(client_test[i])
-            test_y_all.append(np.mean(client_test[i+1]))
-        
-        test_x_all.append(client_test[-1])
-        test_y_all.append(np.mean(client_test[-1]))
-        
-        test_x_tasks = [test_x_all for _ in range(6)]
-        test_y_tasks = [test_y_all for _ in range(6)]
-        
-        train_data_dict[client_name] = {
-            'x': x_tasks,
-            'y': y_tasks
-        }
-        
-        test_data_dict[client_name] = {
-            'x': test_x_tasks,
-            'y': test_y_tasks
-        }
-    
-    # Save regression version
-    ili_data_regression = {
-        'client_names': [f'client_{i}' for i in range(7)],
-        'train_data': train_data_dict,
-        'test_data': test_data_dict,
-        'unique_labels': 1,  # Regression task
-        'normalization': {'min': data_min, 'max': data_max},
-        'client_assignments': client_assignments,
-        'input_dim': 7,
-        'num_tasks': 6,
-        'samples_per_task': 50,
-        'task_type': 'regression'
-    }
-    
-    output_path = os.path.join(output_dir, 'ili_afcl_regression_data.pkl')
-    with open(output_path, 'wb') as f:
-        pickle.dump(ili_data_regression, f)
-    
-    print(f"\nRegression data saved to {output_path}")
-    
-    return ili_data_regression
-
-
 if __name__ == "__main__":
     import argparse
     
@@ -303,13 +181,7 @@ if __name__ == "__main__":
                         help='Path to the state360.txt file')
     parser.add_argument('--output_dir', type=str, default='data/processed',
                         help='Directory to save processed data')
-    parser.add_argument('--task_type', type=str, default='classification',
-                        choices=['classification', 'regression'],
-                        help='Type of task to prepare data for')
     
     args = parser.parse_args()
     
-    if args.task_type == 'classification':
-        preprocess_ili_data(args.input_path, args.output_dir)
-    else:
-        preprocess_ili_data_regression(args.input_path, args.output_dir)
+    preprocess_ili_data(args.input_path, args.output_dir)

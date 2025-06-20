@@ -61,6 +61,11 @@ def read_user_data_PreciseFCL(index, data, dataset='', count_labels=False, task 
         train_data = [(x, y) for x, y in zip(X_train, y_train)]
         test_data = [(x, y) for x, y in zip(X_test, y_test)]
 
+    if 'ILI' in dataset:
+        # ILI data is already in numpy/tensor format
+        train_data = [(torch.FloatTensor(x), y) for x, y in zip(X_train, y_train)]
+        test_data = [(torch.FloatTensor(x), y) for x, y in zip(X_test, y_test)]
+        
     if count_labels:
         label_info = {}
         unique_y, counts=torch.unique(y_train, return_counts=True)

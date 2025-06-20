@@ -89,7 +89,8 @@ class PreciseModel(nn.Module):
                 self.flow = self.get_1d_nflow_model(feature_dim=int(np.prod(self.xa_shape)), 
                                                 hidden_feature=512, context_feature=self.num_classes,
                                                 num_layers=4)
-                
+        
+        
         self.classifier_optimizer = optim.Adam(
             self.classifier.parameters(),
             lr=lr, weight_decay=weight_decay, betas=(beta1, beta2),
@@ -112,6 +113,30 @@ class PreciseModel(nn.Module):
             flow_params = sum(p.numel() for p in self.flow.parameters())
         else:
             flow_params = 0
+        
+        if 'ILI' in args.dataset:
+            self.xa_shape = [256]  # Reduced dimension for time-series
+            self.num_classes = 49  # 49 states
+            input_dim = 7  # 7 states per client
+            
+            # Import the ILI model
+            from FLAlgorithms.PreciseFCLNet.ili_model import ILI_FCN
+            
+            self.classifier = ILI_FCN(
+                input_dim=input_dim,
+                hidden_dims=[128, 256, 256],
+                xa_dim=int(np.prod(self.xa_shape)),
+                num_classes=self.num_classes
+            )
+            
+            if self.algorithm == 'PreciseFCL':
+                self.flow = self.get_1d_nflow_model(
+                    feature_dim=int(np.prod(self.xa_shape)),
+                    hidden_feature=256,
+                    context_feature=self.num_classes,
+                    num_layers=4
+                )
+
         logger.info("Classifier model has %.3f M parameters; Flow model has %.3f M parameters", class_params / 1e6, flow_params / 1.0e6)
 
     def to(self, device):

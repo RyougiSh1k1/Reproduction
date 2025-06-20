@@ -6,7 +6,6 @@ import torchvision.datasets as datasets
 from torchvision import transforms
 import random
 import torch.utils.data as data
-from utils.tinyimagenet import TinyImageNetDataset
 
 def testify_client_y_list(y_list, inds, client_y_list):
     y_list = np.array(y_list)
@@ -75,66 +74,10 @@ def get_dataset(args, dataset_name, datadir, data_split_file):
 
         data_train = datasets.CIFAR100(datadir, download=True, train=True)
         data_test = datasets.CIFAR100(datadir, download=True, train=False)
+    if dataset_name == 'ILI':
+        from utils.ili_dataset import get_ili_dataset
+        return get_ili_dataset(args, datadir, data_split_file)
 
-    elif args.dataset=='MNIST-SVHN-FASHION':
-        unique_labels = 20
-
-        download = False
-        repeat_transform = transforms.Lambda(lambda x: x.repeat(3, 1, 1))
-        mean=(0.1,)
-        std=(0.2752,)
-        # 60000 10000
-        mnist_data_train = datasets.MNIST(args.datadir, train=True,download=download,transform=transforms.Compose([
-                    transforms.Pad(padding=2,fill=0),transforms.ToTensor(),transforms.Normalize(mean,std), repeat_transform]))
-        mnist_data_test = datasets.MNIST(args.datadir, train=False,download=download,transform=transforms.Compose([
-                    transforms.Pad(padding=2,fill=0),transforms.ToTensor(),transforms.Normalize(mean,std), repeat_transform]))
-
-        mean=[0.4377,0.4438,0.4728]
-        std=[0.198,0.201,0.197]
-        # 73257 26032
-        svhn_data_train = datasets.SVHN(args.datadir, split='train',download=download,transform=transforms.Compose([transforms.ToTensor(),transforms.Normalize(mean,std)]))
-        svhn_data_test = datasets.SVHN(args.datadir, split='test',download=download,transform=transforms.Compose([transforms.ToTensor(),transforms.Normalize(mean,std)])) 
-
-        mean=(0.2190,) # Mean and std including the padding
-        std=(0.3318,)
-        # 60000 
-        fashionmnist_data_train = datasets.FashionMNIST(args.datadir, train=True, download=download, transform=transforms.Compose([
-                    transforms.Pad(padding=2, fill=0), transforms.ToTensor(),transforms.Normalize(mean, std), repeat_transform]),
-                    target_transform=lambda x:x+10)
-        fashionmnist_data_test = datasets.FashionMNIST(args.datadir, train=False, download=download, transform=transforms.Compose([
-                    transforms.Pad(padding=2, fill=0), transforms.ToTensor(),transforms.Normalize(mean, std), repeat_transform]),
-                    target_transform=lambda x:x+10)
-        # fashionmnist_label_train = [fashionmnist_data_train[i][1] for i in range(len(fashionmnist_data_train))]
-
-        data_train = []
-        data_test = []
-        for dataset in [mnist_data_train, svhn_data_train, fashionmnist_data_train]:
-            data_train += [dataset[i] for i in range(len(dataset))]
-        for dataset in [mnist_data_test, svhn_data_test, fashionmnist_data_test]:
-            data_test += [dataset[i] for i in range(len(dataset))]
-
-    elif dataset_name=='TinyImageNet':
-        unique_labels = 200
-        
-        # Define transforms for TinyImageNet
-        train_transform = transforms.Compose([
-            transforms.RandomCrop(64, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-        
-        test_transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
-        
-        # You'll need to implement a custom TinyImageNet dataset class or use an existing one
-        # For now, assuming you have TinyImageNet downloaded and structured properly
-        data_train = TinyImageNetDataset(os.path.join(datadir, 'tiny-imagenet-200'), 
-                                        split='train', transform=train_transform)
-        data_test = TinyImageNetDataset(os.path.join(datadir, 'tiny-imagenet-200'), 
-                                    split='val', transform=test_transform)
     
     train_y_list = [data_train[i][1] for i in range(len(data_train))]
     test_y_list = [data_test[i][1] for i in range(len(data_test))]
